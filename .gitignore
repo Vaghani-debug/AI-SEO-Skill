@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+test/last_fetch.html
+test/last_fetch.json
+test/last_result_*.md
