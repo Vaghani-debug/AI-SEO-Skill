@@ -14,6 +14,7 @@ Run the application locally with:
     uvicorn src.main:app --reload
 """
 
+import contextlib  # contextlib.asynccontextmanager used for the lifespan event handler
 import logging  # Standard Python logging used throughout the application
 import os  # Used to create the reports directory if it does not exist
 
@@ -44,6 +45,18 @@ logging.basicConfig(
 # FastAPI application instance
 # ---------------------------------------------------------------------------
 
+@contextlib.asynccontextmanager
+async def lifespan(application: FastAPI):  # type: ignore[type-arg]
+    """Log startup and shutdown messages using the modern lifespan event pattern."""
+    logger.info("AI SEO Agent %s started successfully.", settings.app_version)  # Logged when uvicorn is ready
+    yield  # Application runs here — yield separates startup logic from shutdown logic
+    logger.info("AI SEO Agent shutting down.")  # Logged when uvicorn receives SIGTERM or Ctrl+C
+
+
+# ---------------------------------------------------------------------------
+# Application instance
+# ---------------------------------------------------------------------------
+
 app = FastAPI(
     title=settings.app_title,  # "AI SEO Agent" — shown in the /docs Swagger UI header
     version=settings.app_version,  # "0.1.0" — shown in /docs
@@ -54,6 +67,7 @@ app = FastAPI(
     ),  # Long description shown at the top of /docs
     docs_url="/docs",  # Swagger UI available at http://127.0.0.1:8000/docs
     redoc_url="/redoc",  # ReDoc UI available at http://127.0.0.1:8000/redoc
+    lifespan=lifespan,  # Modern lifespan replaces the deprecated on_event decorators
 )
 
 # ---------------------------------------------------------------------------
@@ -115,21 +129,6 @@ async def health() -> JSONResponse:
             "app": settings.app_title,  # Include the app name so the caller knows which service responded
         }
     )
-
-# ---------------------------------------------------------------------------
-# Application lifecycle events
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    """Log a startup message when the application begins accepting requests."""
-    logger.info("AI SEO Agent %s started successfully.", settings.app_version)  # Visible in the terminal on uvicorn start
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    """Log a shutdown message when the application stops."""
-    logger.info("AI SEO Agent shutting down.")  # Visible in the terminal when uvicorn is stopped
 
 # ---------------------------------------------------------------------------
 # Static files (UI) — MUST be last
