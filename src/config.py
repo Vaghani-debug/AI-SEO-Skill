@@ -1,0 +1,93 @@
+"""
+src/config.py
+
+Application configuration.
+
+Loads all settings from environment variables (via .env file) into a typed
+Pydantic settings model.  Every service in the application should import
+Settings from this module — no service should read os.environ directly.
+
+Usage:
+    from src.config import get_settings
+    settings = get_settings()
+"""
+
+from functools import lru_cache  # lru_cache lets us create a singleton settings object without a global variable
+
+from pydantic_settings import BaseSettings  # BaseSettings reads fields from environment variables automatically
+from pydantic import Field  # Field lets us set defaults and descriptions for each setting
+
+
+class Settings(BaseSettings):
+    """
+    All configuration values for the AI SEO Agent MVP.
+
+    Values are read from environment variables.
+    If a .env file is present in the working directory, it is loaded automatically.
+    """
+
+    # --- LLM / Gemini -------------------------------------------------------
+
+    gemini_api_key: str = Field(
+        default="",  # Empty default so the app starts without crashing; a missing key is caught at report generation time
+        description="Google Gemini API key loaded from GEMINI_API_KEY in .env",
+    )
+
+    gemini_model: str = Field(
+        default="gemini-1.5-flash",  # Default to the fast, cost-effective Gemini model
+        description="Gemini model name to use for LLM report generation",
+    )
+
+    # --- HTTP Fetch ----------------------------------------------------------
+
+    fetch_timeout_seconds: int = Field(
+        default=15,  # Maximum seconds to wait for any single HTTP request before giving up
+        description="Timeout in seconds for outbound HTTP requests to audited websites",
+    )
+
+    fetch_max_redirects: int = Field(
+        default=5,  # Limit redirect chains to prevent infinite loops on misconfigured sites
+        description="Maximum number of HTTP redirects to follow when fetching a URL",
+    )
+
+    # --- Report Storage ------------------------------------------------------
+
+    reports_dir: str = Field(
+        default="reports",  # Local folder where generated .md and .pdf files are saved by audit_id
+        description="Directory path (relative to project root) where audit reports are stored",
+    )
+
+    # --- Application ---------------------------------------------------------
+
+    app_title: str = Field(
+        default="AI SEO Agent",  # Shown in the OpenAPI docs at /docs
+        description="Application title shown in API documentation",
+    )
+
+    app_version: str = Field(
+        default="0.1.0",  # MVP version; increment when the API shape changes
+        description="Application version shown in API documentation",
+    )
+
+    debug: bool = Field(
+        default=False,  # Set to True in development to enable detailed error responses
+        description="Enable debug mode; never set to True in production",
+    )
+
+    class Config:
+        # Tell Pydantic to load values from a .env file in the current working directory
+        env_file = ".env"
+        # Ignore extra environment variables that don't match any field
+        extra = "ignore"
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """
+    Return the application settings singleton.
+
+    Uses lru_cache so the .env file is read exactly once per process,
+    not on every request.  Call get_settings() wherever settings are needed
+    instead of instantiating Settings() directly.
+    """
+    return Settings()  # Reads .env and environment variables on first call only
