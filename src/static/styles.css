@@ -1,0 +1,401 @@
+/* =============================================================================
+   styles.css — AI SEO Agent MVP UI
+   Simple, professional stylesheet. No frameworks or build tools required.
+   All measurements use rem for accessibility (respects user font-size settings).
+   ============================================================================= */
+
+
+/* --- Reset and base -------------------------------------------------------- */
+
+*, *::before, *::after {
+  box-sizing: border-box; /* Include padding and border in every element's width calculation */
+}
+
+html {
+  font-size: 16px; /* Base font size; all rem values are relative to this */
+  scroll-behavior: smooth; /* Smooth scrolling when navigating to anchors on the page */
+}
+
+body {
+  margin: 0; /* Remove the default browser margin around the page */
+  padding: 0; /* Remove the default browser padding */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; /* System font stack — no download required, looks native on all OS */
+  font-size: 1rem; /* Body text size matches the base font size */
+  line-height: 1.6; /* Comfortable reading line height */
+  color: #1a1a2e; /* Dark navy body text — easier to read than pure black */
+  background-color: #f5f7fa; /* Light grey background so the white cards stand out */
+}
+
+
+/* --- Site header ----------------------------------------------------------- */
+
+.site-header {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%); /* Dark navy gradient — professional, distinct from the page body */
+  color: #ffffff; /* White text on the dark header background */
+  padding: 2rem 1rem; /* Vertical breathing room around the title */
+  text-align: center; /* Centre the title and tagline */
+}
+
+.header-inner {
+  max-width: 800px; /* Constrain content width for comfortable reading on wide screens */
+  margin: 0 auto; /* Centre the inner container horizontally */
+}
+
+.site-title {
+  font-size: 2rem; /* Large heading to establish visual hierarchy */
+  font-weight: 700; /* Bold weight for the product name */
+  margin: 0 0 0.5rem; /* Remove default top margin; add a small gap below */
+  letter-spacing: -0.5px; /* Tighten letter spacing slightly for headings */
+}
+
+.site-tagline {
+  font-size: 1rem; /* Normal body size — the tagline is supporting text */
+  opacity: 0.85; /* Slightly dimmed so it does not compete with the title */
+  margin: 0; /* Remove default paragraph margins */
+}
+
+
+/* --- Main content area ----------------------------------------------------- */
+
+.main-content {
+  max-width: 900px; /* Limit width so long lines do not become hard to read */
+  margin: 2rem auto; /* Centre the content and add vertical space below the header */
+  padding: 0 1rem; /* Horizontal padding so content does not touch screen edges on mobile */
+}
+
+
+/* --- Audit form ------------------------------------------------------------ */
+
+.audit-form-section {
+  margin-bottom: 2rem; /* Space between the form and the sections that appear after it */
+}
+
+.form-card {
+  background: #ffffff; /* White card stands out from the grey page background */
+  border-radius: 12px; /* Rounded corners for a modern, friendly appearance */
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); /* Subtle shadow gives the card depth */
+  padding: 2rem; /* Internal spacing between the card edges and its content */
+}
+
+.form-label {
+  display: block; /* Block display so the label sits above the input, not beside it */
+  font-weight: 600; /* Semi-bold label so it is easy to spot */
+  margin-bottom: 0.5rem; /* Gap between the label and the input row */
+  color: #1a1a2e; /* Match body text colour */
+}
+
+.input-row {
+  display: flex; /* Flex layout puts the input and button on the same row */
+  gap: 0.75rem; /* Space between the input and the button */
+  align-items: stretch; /* Stretch both children to the same height */
+}
+
+.url-input {
+  flex: 1; /* Input grows to fill all available space; button keeps its natural width */
+  padding: 0.75rem 1rem; /* Comfortable tap/click target size */
+  font-size: 1rem; /* Match body font size so text does not look small inside the input */
+  border: 2px solid #dde3ec; /* Light blue-grey border at rest */
+  border-radius: 8px; /* Slightly rounded corners on the input */
+  outline: none; /* Remove default browser outline — we draw our own on focus */
+  transition: border-color 0.2s ease; /* Smooth border colour change on focus */
+  color: #1a1a2e; /* Dark text inside the input */
+  background: #f9fbfd; /* Very light blue tint inside the input */
+}
+
+.url-input:focus {
+  border-color: #0f3460; /* Dark blue border on focus — clear visual feedback */
+  background: #ffffff; /* Pure white background when the user is typing */
+}
+
+.form-hint {
+  font-size: 0.85rem; /* Smaller than body text — this is supplementary information */
+  color: #6b7280; /* Muted grey colour for helper text */
+  margin: 0.5rem 0 0; /* Small gap between the input row and the hint */
+}
+
+
+/* --- Buttons --------------------------------------------------------------- */
+
+.btn {
+  padding: 0.75rem 1.5rem; /* Comfortable tap target */
+  font-size: 1rem; /* Match body font size */
+  font-weight: 600; /* Semi-bold text on buttons */
+  border: none; /* No border — the background colour defines the button */
+  border-radius: 8px; /* Rounded corners matching the input */
+  cursor: pointer; /* Pointer cursor tells users the element is clickable */
+  transition: background-color 0.2s ease, transform 0.1s ease; /* Smooth hover and press animations */
+  white-space: nowrap; /* Prevent button text from wrapping onto two lines */
+}
+
+.btn:active {
+  transform: scale(0.97); /* Slight shrink on click — tactile "press" feedback */
+}
+
+.btn-primary {
+  background-color: #0f3460; /* Dark blue primary action button */
+  color: #ffffff; /* White text on the dark button */
+}
+
+.btn-primary:hover {
+  background-color: #1a4f8a; /* Lighter blue on hover — visible hover state */
+}
+
+.btn-secondary {
+  background-color: #e5e7eb; /* Light grey for secondary actions like "Try again" */
+  color: #374151; /* Dark grey text */
+}
+
+.btn-secondary:hover {
+  background-color: #d1d5db; /* Slightly darker grey on hover */
+}
+
+.btn-success {
+  background-color: #059669; /* Green PDF download button — positive action */
+  color: #ffffff; /* White text */
+}
+
+.btn-success:hover {
+  background-color: #047857; /* Darker green on hover */
+}
+
+
+/* --- Loading state --------------------------------------------------------- */
+
+.loading-section {
+  display: flex; /* Flex layout to centre the spinner and message */
+  flex-direction: column; /* Stack spinner above message */
+  align-items: center; /* Centre children horizontally */
+  gap: 1rem; /* Space between spinner and message */
+  padding: 3rem; /* Large padding makes the loading section feel spacious */
+}
+
+.loading-message {
+  font-size: 1rem; /* Normal body text */
+  color: #6b7280; /* Muted grey — not alarming, just informative */
+  margin: 0; /* Remove default paragraph margins */
+}
+
+/* Spinner: an animated ring drawn with CSS borders */
+.spinner {
+  width: 48px; /* Width of the spinning ring */
+  height: 48px; /* Height of the spinning ring */
+  border: 5px solid #dde3ec; /* Light grey ring — the "track" the spinner moves on */
+  border-top-color: #0f3460; /* Dark blue segment — the "moving" part of the spinner */
+  border-radius: 50%; /* Make the border into a circle */
+  animation: spin 0.8s linear infinite; /* Continuously rotate the element */
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); } /* One full clockwise rotation per cycle */
+}
+
+
+/* --- Error display --------------------------------------------------------- */
+
+.error-section {
+  margin-bottom: 2rem; /* Space below the error card before other sections */
+}
+
+.error-card {
+  background: #fff5f5; /* Very light red background — signals a problem without being alarming */
+  border: 1px solid #fca5a5; /* Light red border */
+  border-left: 4px solid #dc2626; /* Bold red left stripe draws the eye to the error */
+  border-radius: 8px; /* Consistent border-radius */
+  padding: 1.5rem; /* Comfortable internal padding */
+}
+
+.error-title {
+  font-weight: 700; /* Bold heading for the error */
+  color: #dc2626; /* Red colour reinforces the error state */
+  margin: 0 0 0.5rem; /* Small gap between title and message */
+}
+
+.error-message {
+  color: #374151; /* Dark grey — readable without being as intense as the red title */
+  margin: 0 0 1rem; /* Gap between message and the Try Again button */
+}
+
+
+/* --- Report section -------------------------------------------------------- */
+
+.report-section {
+  margin-bottom: 3rem; /* Space below the report so it does not sit against the footer */
+}
+
+.report-header {
+  display: flex; /* Flex layout to put report title and download button on one line */
+  justify-content: space-between; /* Push title to the left and button to the right */
+  align-items: center; /* Vertically centre the title and button */
+  margin-bottom: 1rem; /* Space between the header row and the report meta text */
+  flex-wrap: wrap; /* Wrap to two rows on narrow screens */
+  gap: 0.75rem; /* Gap between title and button when they wrap */
+}
+
+.report-title {
+  font-size: 1.5rem; /* Prominent but smaller than the page title */
+  font-weight: 700; /* Bold */
+  color: #1a1a2e; /* Dark navy */
+  margin: 0; /* Remove default heading margins */
+}
+
+.report-meta {
+  font-size: 0.875rem; /* Slightly smaller than body — this is supporting information */
+  color: #6b7280; /* Muted grey */
+  margin-bottom: 1.5rem; /* Space between meta and the report body */
+}
+
+.report-body {
+  background: #ffffff; /* White background for the report text */
+  border-radius: 12px; /* Consistent rounded corners */
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); /* Same shadow as the form card */
+  padding: 2rem; /* Internal padding so text does not touch the card edges */
+  line-height: 1.8; /* Generous line height for long report text */
+}
+
+/* Headings inside the rendered Markdown report */
+.report-body h1 {
+  font-size: 1.6rem; /* Large but smaller than the page h1 */
+  color: #0f3460; /* Dark blue headings match the brand colour */
+  border-bottom: 2px solid #e5e7eb; /* Subtle rule below h1 headings */
+  padding-bottom: 0.5rem; /* Space between heading text and the rule */
+  margin-top: 2rem; /* Extra space above h1 headings to separate sections */
+}
+
+.report-body h2 {
+  font-size: 1.25rem; /* Medium heading */
+  color: #1a1a2e; /* Dark navy */
+  margin-top: 1.75rem; /* Space to separate subsections */
+}
+
+.report-body h3 {
+  font-size: 1.1rem; /* Slightly larger than body text */
+  color: #374151; /* Dark grey */
+  margin-top: 1.5rem; /* Space above sub-subsections */
+}
+
+.report-body table {
+  width: 100%; /* Full-width tables */
+  border-collapse: collapse; /* Remove gaps between table cells */
+  margin: 1rem 0; /* Vertical space around tables */
+  font-size: 0.9rem; /* Slightly smaller text in tables */
+}
+
+.report-body th {
+  background: #f0f4ff; /* Light blue header row */
+  font-weight: 600; /* Bold column headings */
+  padding: 0.6rem 0.9rem; /* Cell padding */
+  text-align: left; /* Left-align header text */
+  border: 1px solid #dde3ec; /* Light border around cells */
+}
+
+.report-body td {
+  padding: 0.6rem 0.9rem; /* Same padding as header cells */
+  border: 1px solid #dde3ec; /* Consistent border */
+  vertical-align: top; /* Top-align multi-line cell content */
+}
+
+.report-body tr:nth-child(even) {
+  background: #f9fbfd; /* Zebra striping on even rows for easy reading */
+}
+
+.report-body code {
+  background: #f3f4f6; /* Light grey code background */
+  padding: 0.15rem 0.4rem; /* Small padding around inline code */
+  border-radius: 4px; /* Slightly rounded corners on inline code blocks */
+  font-size: 0.9em; /* Slightly smaller than surrounding text */
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; /* Monospace font for code */
+}
+
+.report-body pre {
+  background: #1a1a2e; /* Dark background for code blocks */
+  color: #f8f8f2; /* Light text on the dark background */
+  padding: 1rem; /* Internal padding for code blocks */
+  border-radius: 8px; /* Rounded corners on code blocks */
+  overflow-x: auto; /* Horizontal scroll for long code lines */
+  font-size: 0.875rem; /* Slightly smaller text in code blocks */
+}
+
+.report-body blockquote {
+  border-left: 4px solid #0f3460; /* Blue left rule on blockquotes */
+  margin: 1rem 0; /* Vertical space around blockquotes */
+  padding: 0.5rem 1rem; /* Internal padding */
+  background: #f0f4ff; /* Light blue tint inside blockquotes */
+  border-radius: 0 8px 8px 0; /* Round the right corners only */
+}
+
+.report-body ul, .report-body ol {
+  padding-left: 1.5rem; /* Indent list items */
+  margin: 0.5rem 0; /* Vertical space around lists */
+}
+
+.report-body li {
+  margin-bottom: 0.3rem; /* Small space between list items */
+}
+
+.report-body strong {
+  color: #1a1a2e; /* Dark colour for bold text */
+}
+
+.report-body a {
+  color: #0f3460; /* Brand colour for links */
+  text-decoration: underline; /* Standard link underline */
+}
+
+.report-body a:hover {
+  color: #1a4f8a; /* Lighter blue on hover */
+}
+
+.report-body hr {
+  border: none; /* Remove default hr border */
+  border-top: 1px solid #e5e7eb; /* Thin rule for section dividers */
+  margin: 2rem 0; /* Generous vertical space around dividers */
+}
+
+
+/* --- Utility: hidden ------------------------------------------------------- */
+
+.hidden {
+  display: none !important; /* !important ensures hidden always wins over other display rules */
+}
+/* app.js adds/removes this class to show and hide sections dynamically */
+
+
+/* --- Site footer ----------------------------------------------------------- */
+
+.site-footer {
+  text-align: center; /* Centre the footer text */
+  padding: 1.5rem 1rem; /* Vertical and horizontal padding */
+  background: #f0f4ff; /* Light blue tint distinguishes the footer from the main content */
+  border-top: 1px solid #dde3ec; /* Thin rule separates the footer from the content above */
+  margin-top: 2rem; /* Space between the last content section and the footer */
+}
+
+.footer-text {
+  font-size: 0.85rem; /* Small text — footer is not the main focus */
+  color: #6b7280; /* Muted grey */
+  margin: 0; /* Remove default paragraph margin */
+}
+
+
+/* --- Responsive adjustments ------------------------------------------------ */
+
+@media (max-width: 600px) {
+  /* On small screens (phones), stack the input and button vertically */
+
+  .input-row {
+    flex-direction: column; /* Stack input above button on narrow screens */
+  }
+
+  .btn-primary {
+    width: 100%; /* Full-width button on mobile so it is easy to tap */
+  }
+
+  .report-header {
+    flex-direction: column; /* Stack title and download button on narrow screens */
+    align-items: flex-start; /* Left-align when stacked */
+  }
+
+  .site-title {
+    font-size: 1.5rem; /* Slightly smaller title on very narrow screens */
+  }
+}

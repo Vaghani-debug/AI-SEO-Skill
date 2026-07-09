@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<!-- DOCTYPE declaration: tells the browser this is an HTML5 document -->
+<html lang="en">
+<!-- lang="en" helps screen readers and search engines identify the page language -->
+
+<head>
+  <!-- head section: metadata, styles, and scripts that are not visible in the page body -->
+
+  <meta charset="UTF-8">
+  <!-- charset=UTF-8: ensures text displays correctly for all languages and special characters -->
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- viewport meta: makes the page scale correctly on mobile devices and tablets -->
+
+  <meta name="description" content="AI-powered SEO audit tool. Enter a website URL and receive a professional SEO audit report with a downloadable PDF.">
+  <!-- description meta: describes the page for search engines and browser history -->
+
+  <title>AI SEO Agent — SEO Audit Tool</title>
+  <!-- title: shown in the browser tab and in search engine results -->
+
+  <link rel="stylesheet" href="/styles.css">
+  <!-- link to the external stylesheet — FastAPI serves this from src/static/styles.css -->
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- marked.js: open-source Markdown-to-HTML parser loaded from CDN — converts the LLM report to readable HTML -->
+
+</head>
+
+<body>
+  <!-- body: everything visible to the user goes here -->
+
+  <!-- ============================================================
+       Page header
+       ============================================================ -->
+  <header class="site-header">
+    <!-- site-header: top banner with the product name -->
+
+    <div class="header-inner">
+      <!-- header-inner: constrains the header content to a readable max-width -->
+
+      <h1 class="site-title">AI SEO Agent</h1>
+      <!-- main heading: identifies the product at the top of the page -->
+
+      <p class="site-tagline">Enter a website URL to generate a professional SEO audit report.</p>
+      <!-- tagline: one-line description that tells new users what to do -->
+
+    </div>
+  </header>
+
+  <!-- ============================================================
+       Main content area
+       ============================================================ -->
+  <main class="main-content">
+    <!-- main: the primary content landmark — used by screen readers to jump to the content -->
+
+    <!-- --------------------------------------------------------
+         Audit form
+         -------------------------------------------------------- -->
+    <section class="audit-form-section" aria-label="Start SEO Audit">
+      <!-- section groups the input form; aria-label names it for accessibility tools -->
+
+      <div class="form-card">
+        <!-- form-card: white card container that visually groups the input and button -->
+
+        <label for="website-url" class="form-label">Website URL</label>
+        <!-- label: links to the input below via the "for" attribute; required for accessibility -->
+
+        <div class="input-row">
+          <!-- input-row: flex container that puts the input and button side-by-side on desktop -->
+
+          <input
+            type="url"
+            id="website-url"
+            name="website-url"
+            class="url-input"
+            placeholder="https://www.example.com or www.example.com"
+            autocomplete="url"
+            spellcheck="false"
+            aria-describedby="url-hint"
+          >
+          <!-- url-input: the text field where the user types the website address
+               - type="url" enables mobile URL keyboard and basic browser-level format checking
+               - autocomplete="url" lets browsers suggest previously visited URLs
+               - aria-describedby links to the hint text below for screen readers -->
+
+          <button
+            type="button"
+            id="audit-btn"
+            class="btn btn-primary"
+            onclick="handleAudit()"
+          >
+            Audit
+          </button>
+          <!-- audit button: clicking this starts the SEO audit
+               - type="button" prevents accidental form submission
+               - onclick calls handleAudit() defined in app.js -->
+
+        </div>
+        <!-- end input-row -->
+
+        <p id="url-hint" class="form-hint">
+          Enter a full URL or bare domain. The tool will normalise it automatically.
+        </p>
+        <!-- url-hint: helper text shown below the input; linked to input via aria-describedby -->
+
+      </div>
+      <!-- end form-card -->
+
+    </section>
+    <!-- end audit-form-section -->
+
+    <!-- --------------------------------------------------------
+         Loading state
+         -------------------------------------------------------- -->
+    <section
+      id="loading-section"
+      class="loading-section hidden"
+      aria-live="polite"
+      aria-label="Audit in progress"
+    >
+      <!-- loading-section: shown while the API request is processing
+           - hidden: CSS class that sets display:none; removed by app.js when loading starts
+           - aria-live="polite" announces the loading message to screen readers without interrupting
+           - aria-label names the section for screen readers -->
+
+      <div class="spinner" aria-hidden="true"></div>
+      <!-- spinner: animated CSS ring that shows the page is working
+           - aria-hidden="true" hides the decorative spinner from screen readers -->
+
+      <p class="loading-message">Analysing website — this may take 20–40 seconds…</p>
+      <!-- loading-message: plain-English message so the user knows the app is working, not frozen -->
+
+    </section>
+    <!-- end loading-section -->
+
+    <!-- --------------------------------------------------------
+         Error display
+         -------------------------------------------------------- -->
+    <section
+      id="error-section"
+      class="error-section hidden"
+      aria-live="assertive"
+      aria-label="Error"
+    >
+      <!-- error-section: shown when the audit fails or the URL is invalid
+           - aria-live="assertive" immediately announces the error to screen readers -->
+
+      <div class="error-card">
+        <!-- error-card: red-bordered container that makes error messages stand out visually -->
+
+        <p class="error-title">Something went wrong</p>
+        <!-- error-title: fixed heading so the user knows this is an error, not part of the report -->
+
+        <p id="error-message" class="error-message"></p>
+        <!-- error-message: filled by app.js with the specific error text returned by the API -->
+
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick="resetUI()"
+        >
+          Try again
+        </button>
+        <!-- try-again button: calls resetUI() to clear the error and let the user submit a new URL -->
+
+      </div>
+      <!-- end error-card -->
+
+    </section>
+    <!-- end error-section -->
+
+    <!-- --------------------------------------------------------
+         Report preview
+         -------------------------------------------------------- -->
+    <section
+      id="report-section"
+      class="report-section hidden"
+      aria-label="SEO Audit Report"
+    >
+      <!-- report-section: shown after a successful audit
+           - hidden initially; app.js removes the hidden class when the report is ready -->
+
+      <div class="report-header">
+        <!-- report-header: row containing the title and the PDF download button -->
+
+        <h2 class="report-title">SEO Audit Report</h2>
+        <!-- report-title: section heading for the generated report -->
+
+        <button
+          type="button"
+          id="download-btn"
+          class="btn btn-success"
+          onclick="downloadPdf()"
+        >
+          ⬇ Download PDF
+        </button>
+        <!-- download button: triggers downloadPdf() in app.js which opens the PDF endpoint
+             - shown alongside the report so the user can download at any time -->
+
+      </div>
+      <!-- end report-header -->
+
+      <div class="report-meta" id="report-meta"></div>
+      <!-- report-meta: small text showing the audited URL and the audit timestamp
+           - filled by app.js after the API responds -->
+
+      <article id="report-body" class="report-body"></article>
+      <!-- report-body: the container where app.js renders the Markdown report as HTML
+           - using article because the SEO report is a self-contained piece of content -->
+
+    </section>
+    <!-- end report-section -->
+
+  </main>
+  <!-- end main -->
+
+  <!-- ============================================================
+       Page footer
+       ============================================================ -->
+  <footer class="site-footer">
+    <!-- site-footer: minimal footer with version information -->
+
+    <p class="footer-text">AI SEO Agent &mdash; MVP v0.1.0 &mdash; Powered by Gemini</p>
+    <!-- footer text: identifies the product version and the underlying LLM provider -->
+
+  </footer>
+  <!-- end footer -->
+
+  <script src="/app.js"></script>
+  <!-- app.js loaded at the bottom of body so the DOM is fully parsed before the script runs -->
+
+</body>
+</html>
