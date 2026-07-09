@@ -77,26 +77,14 @@ os.makedirs(settings.reports_dir, exist_ok=True)  # exist_ok=True means no error
 logger.info("Reports directory ready: %s", settings.reports_dir)  # Confirm the directory path at startup
 
 # ---------------------------------------------------------------------------
-# Static files (UI)
-# ---------------------------------------------------------------------------
-
-# The static/ directory does not exist yet — it is created in Step 3 (UI page).
-# We only mount it when it exists to avoid a startup error during Step 2 testing.
-_static_dir = "src/static"  # Path to the folder that will hold index.html, styles.css, app.js
-if os.path.isdir(_static_dir):
-    app.mount(
-        "/",  # Mount at the root path so http://127.0.0.1:8000/ serves index.html
-        StaticFiles(directory=_static_dir, html=True),  # html=True means index.html is the default file
-        name="static",  # Internal name used by FastAPI to refer to this mount
-    )
-    logger.info("Static UI mounted from: %s", _static_dir)  # Confirm the UI directory was found
-else:
-    # Log a notice so the developer knows the UI is not available yet
-    logger.warning("Static UI directory not found (%s) — UI will be added in Step 3.", _static_dir)
-
-# ---------------------------------------------------------------------------
 # API routers
 # ---------------------------------------------------------------------------
+# IMPORTANT: routers must be registered BEFORE the static files mount.
+# In Starlette, routes are evaluated in registration order.  The StaticFiles
+# mount at "/" matches every URL (all paths start with "/").  If it is
+# registered first, it intercepts ALL requests — including API POST calls —
+# and StaticFiles returns 405 for non-GET methods before the router is reached.
+# Registering API routes first ensures they are matched before the catch-all mount.
 
 app.include_router(
     audit_router,  # The router defined in src/api/routes/audit.py
@@ -142,3 +130,21 @@ async def on_startup() -> None:
 async def on_shutdown() -> None:
     """Log a shutdown message when the application stops."""
     logger.info("AI SEO Agent shutting down.")  # Visible in the terminal when uvicorn is stopped
+
+# ---------------------------------------------------------------------------
+# Static files (UI) — MUST be last
+# ---------------------------------------------------------------------------
+# Registered after all API routes so the catch-all mount at "/" does not
+# intercept API POST requests before the router can handle them.
+
+_static_dir = "src/static"  # Path to the folder that holds index.html, styles.css, app.js
+if os.path.isdir(_static_dir):
+    app.mount(
+        "/",  # Mount at the root path so http://127.0.0.1:8000/ serves index.html
+        StaticFiles(directory=_static_dir, html=True),  # html=True means index.html is the default file
+        name="static",  # Internal name used by FastAPI to refer to this mount
+    )
+    logger.info("Static UI mounted from: %s", _static_dir)  # Confirm the UI directory was found
+else:
+    logger.warning("Static UI directory not found (%s).", _static_dir)
+
