@@ -300,6 +300,257 @@ class TestLoadFileHelper:
 
 
 # ---------------------------------------------------------------------------
+# Real file content specifics
+# ---------------------------------------------------------------------------
+
+class TestRealFileContent:
+    """
+    Verify that the real project guidance files contain specific expected markers.
+
+    These tests act as a contract between the guidance files and the application.
+    If someone accidentally clears or renames a section, these tests will fail
+    before the LLM report generator produces incorrect output.
+    """
+
+    def test_audit_prompt_contains_website_url_placeholder(self) -> None:
+        """seo_audit.prompt.md must contain the {{website_url}} template variable."""
+        result = load_prompt_context()
+        assert "{{website_url}}" in result.audit_prompt
+        # This placeholder is replaced with the user's URL when the LLM prompt is assembled
+
+    def test_audit_prompt_instructs_seo_audit_skill_usage(self) -> None:
+        """seo_audit.prompt.md must reference the seo-audit skill."""
+        result = load_prompt_context()
+        assert "seo-audit" in result.audit_prompt.lower()
+        # The prompt explicitly tells the LLM to apply the installed skill
+
+    def test_audit_prompt_references_report_specification(self) -> None:
+        """seo_audit.prompt.md must reference REPORT_SPECIFICATION.md."""
+        result = load_prompt_context()
+        assert "REPORT_SPECIFICATION" in result.audit_prompt or "report_specification" in result.audit_prompt.lower()
+        # The prompt instructs the LLM to follow the report spec
+
+    def test_audit_prompt_references_ai_guidelines(self) -> None:
+        """seo_audit.prompt.md must reference AI_REPORT_GUIDELINES.md."""
+        result = load_prompt_context()
+        assert "AI_REPORT_GUIDELINES" in result.audit_prompt or "ai_report_guidelines" in result.audit_prompt.lower()
+        # The prompt instructs the LLM to follow the AI writing guidelines
+
+    def test_seo_skill_contains_priority_order(self) -> None:
+        """SKILL.md must describe the audit priority order."""
+        result = load_prompt_context()
+        content_lower = result.seo_skill.lower()
+        # The skill defines a priority order — crawlability is always first
+        assert "crawl" in content_lower
+
+    def test_seo_skill_references_robots_txt(self) -> None:
+        """SKILL.md must mention robots.txt as an audit check."""
+        result = load_prompt_context()
+        assert "robots" in result.seo_skill.lower()
+
+    def test_ai_guidelines_mentions_senior_consultant(self) -> None:
+        """AI_REPORT_GUIDELINES.md must define the Senior Technical SEO Consultant persona."""
+        result = load_prompt_context()
+        assert "senior" in result.ai_guidelines.lower()
+        # The persona definition constrains the LLM's tone
+
+    def test_ai_guidelines_defines_severity_language(self) -> None:
+        """AI_REPORT_GUIDELINES.md must define severity levels (Critical, High, etc.)."""
+        result = load_prompt_context()
+        content_lower = result.ai_guidelines.lower()
+        assert "critical" in content_lower or "severity" in content_lower
+
+    def test_report_specification_mentions_pdf(self) -> None:
+        """REPORT_SPECIFICATION.md must reference PDF as the primary output format."""
+        result = load_prompt_context()
+        assert "pdf" in result.report_specification.lower()
+
+    def test_report_specification_mentions_executive_summary(self) -> None:
+        """REPORT_SPECIFICATION.md must describe an Executive Summary section."""
+        result = load_prompt_context()
+        assert "executive summary" in result.report_specification.lower()
+
+
+# ---------------------------------------------------------------------------
+# PromptContext dataclass behaviour
+# ---------------------------------------------------------------------------
+
+class TestPromptContextDataclass:
+    """Tests that PromptContext stores and returns field values correctly."""
+
+    def test_field_values_preserved_exactly(self) -> None:
+        """All four field values are stored and returned without modification."""
+        ctx = PromptContext(
+            audit_prompt="AP_CONTENT",
+            seo_skill="SK_CONTENT",
+            report_specification="RS_CONTENT",
+            ai_guidelines="AG_CONTENT",
+        )
+        assert ctx.audit_prompt == "AP_CONTENT"
+        assert ctx.seo_skill == "SK_CONTENT"
+        assert ctx.report_specification == "RS_CONTENT"
+        assert ctx.ai_guidelines == "AG_CONTENT"
+
+    def test_combined_with_empty_fields_does_not_raise(self) -> None:
+        """combined_system_prompt is produced even when all fields are empty strings."""
+        ctx = PromptContext(
+            audit_prompt="",
+            seo_skill="",
+            report_specification="",
+            ai_guidelines="",
+        )
+        combined = ctx.combined_system_prompt  # Must not raise
+        assert isinstance(combined, str)        # Always returns a string
+
+    def test_combined_no_duplication(self) -> None:
+        """Each field value appears exactly once in combined_system_prompt."""
+        unique_value = "UNIQUE_MARKER_XYZ"
+        ctx = PromptContext(
+            audit_prompt=unique_value,
+            seo_skill="B",
+            report_specification="C",
+            ai_guidelines="D",
+        )
+        combined = ctx.combined_system_prompt
+        assert combined.count(unique_value) == 1  # Appears exactly once — not duplicated
+
+    def test_combined_contains_section_header_ai_guidelines(self) -> None:
+        """combined_system_prompt includes the 'AI Report Guidelines' section header."""
+        ctx = PromptContext(
+            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+        )
+        assert "AI Report Guidelines" in ctx.combined_system_prompt
+
+    def test_combined_contains_section_header_seo_skill(self) -> None:
+        """combined_system_prompt includes the 'SEO Audit Methodology' section header."""
+        ctx = PromptContext(
+            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+        )
+        assert "SEO Audit Methodology" in ctx.combined_system_prompt
+
+    def test_combined_contains_section_header_report_spec(self) -> None:
+        """combined_system_prompt includes the 'Report Structure Specification' section header."""
+        ctx = PromptContext(
+            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+        )
+        assert "Report Structure Specification" in ctx.combined_system_prompt
+
+    def test_combined_contains_section_header_audit_prompt(self) -> None:
+        """combined_system_prompt includes the 'Audit Prompt' section header."""
+        ctx = PromptContext(
+            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+        )
+        assert "Audit Prompt" in ctx.combined_system_prompt
+
+    def test_combined_audit_prompt_appears_last(self) -> None:
+        """The audit prompt section is the last section in combined_system_prompt."""
+        ctx = PromptContext(
+            audit_prompt="AUDIT_LAST",
+            seo_skill="SKILL",
+            report_specification="SPEC",
+            ai_guidelines="GUIDE",
+        )
+        combined = ctx.combined_system_prompt
+        audit_pos = combined.rfind("AUDIT_LAST")       # Last occurrence
+        skill_pos = combined.find("SKILL")
+        spec_pos = combined.find("SPEC")
+        guide_pos = combined.find("GUIDE")
+        # Audit prompt must appear after all other sections
+        assert audit_pos > skill_pos
+        assert audit_pos > spec_pos
+        assert audit_pos > guide_pos
+
+    def test_combined_seo_skill_between_guidelines_and_spec(self) -> None:
+        """SEO skill section appears after guidelines but before report spec."""
+        ctx = PromptContext(
+            audit_prompt="AP", seo_skill="SK", report_specification="RS", ai_guidelines="AG"
+        )
+        combined = ctx.combined_system_prompt
+        assert combined.find("AG") < combined.find("SK") < combined.find("RS")
+
+
+# ---------------------------------------------------------------------------
+# load_prompt_context() determinism
+# ---------------------------------------------------------------------------
+
+class TestLoadPromptContextDeterminism:
+    """Tests that loading is stable and idempotent."""
+
+    def test_loading_twice_returns_identical_content(self) -> None:
+        """Calling load_prompt_context() twice produces identical field values."""
+        first = load_prompt_context()
+        second = load_prompt_context()
+
+        assert first.audit_prompt == second.audit_prompt            # Identical
+        assert first.seo_skill == second.seo_skill
+        assert first.report_specification == second.report_specification
+        assert first.ai_guidelines == second.ai_guidelines
+
+    def test_combined_is_stable_across_calls(self) -> None:
+        """combined_system_prompt produces the same string on every call."""
+        first = load_prompt_context().combined_system_prompt
+        second = load_prompt_context().combined_system_prompt
+        assert first == second   # Deterministic output
+
+    def test_none_root_same_as_omitting_root(self) -> None:
+        """Passing project_root=None explicitly is the same as not passing it."""
+        with_none = load_prompt_context(project_root=None)
+        without_arg = load_prompt_context()
+        assert with_none.audit_prompt == without_arg.audit_prompt
+
+
+# ---------------------------------------------------------------------------
+# Additional _load_file() edge cases
+# ---------------------------------------------------------------------------
+
+class TestLoadFileAdditionalEdgeCases:
+    """Additional edge cases for the internal _load_file() helper."""
+
+    def test_content_not_stripped(self, tmp_path: Path) -> None:
+        """File content is returned exactly as stored — leading/trailing whitespace preserved."""
+        test_file = tmp_path / "padded.md"
+        padded_content = "\n\n  Hello World  \n\n"  # Intentional whitespace
+        test_file.write_text(padded_content, encoding="utf-8")
+
+        content = _load_file(tmp_path, ("padded.md",))
+
+        assert content == padded_content  # No stripping — returned verbatim
+
+    def test_whitespace_only_file_returns_content(self, tmp_path: Path) -> None:
+        """A file containing only whitespace is returned (triggers a warning but no error)."""
+        test_file = tmp_path / "empty.md"
+        test_file.write_text("   \n   ", encoding="utf-8")
+
+        content = _load_file(tmp_path, ("empty.md",))
+
+        assert isinstance(content, str)    # Returns a string, not raises
+        assert content == "   \n   "       # Exact whitespace-only content returned
+
+    def test_multiline_content_preserved(self, tmp_path: Path) -> None:
+        """Multi-line file content is returned with all newlines intact."""
+        test_file = tmp_path / "multi.md"
+        multiline = "Line 1\nLine 2\nLine 3\n"
+        test_file.write_text(multiline, encoding="utf-8")
+
+        content = _load_file(tmp_path, ("multi.md",))
+
+        assert content == multiline         # Newlines preserved
+        assert content.count("\n") == 3    # Exact newline count
+
+    def test_markdown_content_with_special_chars(self, tmp_path: Path) -> None:
+        """Markdown with special characters (dashes, asterisks, backticks) is read correctly."""
+        test_file = tmp_path / "markdown.md"
+        markdown = "# Heading\n\n- **Bold** item\n- `code` item\n\n> Blockquote\n"
+        test_file.write_text(markdown, encoding="utf-8")
+
+        content = _load_file(tmp_path, ("markdown.md",))
+
+        assert "**Bold**" in content       # Markdown syntax preserved
+        assert "`code`" in content
+        assert "> Blockquote" in content
+
+
+# ---------------------------------------------------------------------------
 # Test utility
 # ---------------------------------------------------------------------------
 
