@@ -11,7 +11,7 @@ Each model has a docstring describing its purpose and a comment on
 every field explaining what it holds and why.
 """
 
-from datetime import datetime  # Used to record when an audit was created
+from datetime import datetime, timezone  # datetime.now(timezone.utc) for timezone-aware UTC timestamps
 from typing import Optional  # Marks fields that may be absent (None allowed)
 
 from pydantic import BaseModel, Field, HttpUrl  # BaseModel for data classes; Field for defaults/docs; HttpUrl for URL validation
@@ -72,7 +72,7 @@ class AuditResult(BaseModel):
     )
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,  # Automatically set to the current UTC time when the model is created
+        default_factory=lambda: datetime.now(timezone.utc),  # Timezone-aware UTC timestamp; avoids DeprecationWarning from utcnow()
         description="UTC timestamp when the audit was completed",
     )
 
