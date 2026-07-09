@@ -397,6 +397,18 @@ If implementation conflicts with documentation, ask for clarification before cha
 
 ---
 
+# MVP Implementation Plan
+
+When implementing the MVP UI for website URL input, automated SEO audit generation, Markdown report preview, and downloadable PDF output, follow:
+
+docs/Roadmap/MVP_PLAN.md
+
+Treat this file as the active implementation roadmap for the current MVP phase.
+
+Do not deviate from the plan without explicit user instruction.
+
+---
+
 # Final Principle
 
 When multiple valid solutions exist:
