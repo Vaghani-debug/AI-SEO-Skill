@@ -14,8 +14,9 @@ Usage:
 
 from functools import lru_cache  # lru_cache lets us create a singleton settings object without a global variable
 
-from pydantic_settings import BaseSettings  # BaseSettings reads fields from environment variables automatically
 from pydantic import Field  # Field lets us set defaults and descriptions for each setting
+from pydantic_settings import BaseSettings  # BaseSettings reads fields from environment variables automatically
+from pydantic_settings import SettingsConfigDict  # SettingsConfigDict replaces the nested class Config syntax (Pydantic v2)
 
 
 class Settings(BaseSettings):
@@ -74,11 +75,11 @@ class Settings(BaseSettings):
         description="Enable debug mode; never set to True in production",
     )
 
-    class Config:
-        # Tell Pydantic to load values from a .env file in the current working directory
-        env_file = ".env"
-        # Ignore extra environment variables that don't match any field
-        extra = "ignore"
+    # Pydantic v2 settings configuration — replaces the deprecated nested `class Config` syntax
+    model_config = SettingsConfigDict(
+        env_file=".env",      # Load environment variables from .env in the working directory
+        extra="ignore",       # Silently ignore environment variables that have no matching field
+    )
 
 
 @lru_cache(maxsize=1)
