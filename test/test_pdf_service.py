@@ -17,12 +17,16 @@ from pathlib import Path  # For path assertions
 import pytest  # Test runner
 
 from src.config import Settings  # Provides reports_dir and other settings
+from bs4 import BeautifulSoup, Tag  # BeautifulSoup creates Tag objects for direct helper tests
+from reportlab.platypus import Paragraph, HRFlowable, ListFlowable, Spacer  # Types for assertions
 from src.services.pdf_service import (
-    _build_styles,       # Style builder — tested for completeness
-    _escape_xml,         # XML escape helper — tested for correctness
-    _inline_to_html,     # Inline HTML serialiser — tested with BeautifulSoup Tags
+    _build_cover_header,     # Cover header builder — directly tested
+    _build_styles,           # Style builder — tested for completeness
+    _convert_element,        # Element converter — directly tested
+    _escape_xml,             # XML escape helper — tested for correctness
+    _inline_to_html,         # Inline HTML serialiser — tested with BeautifulSoup Tags
     _markdown_to_flowables,  # Core Markdown converter — tested with various inputs
-    generate_pdf,        # Public function under test
+    generate_pdf,            # Public function under test
 )
 
 
@@ -374,3 +378,274 @@ class TestBuildStyles:
         """H2 font size is larger than H3."""
         styles = _build_styles()
         assert styles["h2"].fontSize > styles["h3"].fontSize
+
+    def test_h3_larger_than_h4(self) -> None:
+        """H3 font size is larger than or equal to H4."""
+        styles = _build_styles()
+        assert styles["h3"].fontSize >= styles["h4"].fontSize
+
+    def test_body_style_has_readable_leading(self) -> None:
+        """Body style has a leading (line-height) value set for readability."""
+        styles = _build_styles()
+        assert styles["body"].leading > styles["body"].fontSize  # Leading > font size for readability
+
+    def test_cover_url_style_is_center_aligned(self) -> None:
+        """cover_url style is centre-aligned for the PDF header."""
+        from reportlab.lib.enums import TA_CENTER
+        styles = _build_styles()
+        assert styles["cover_url"].alignment == TA_CENTER
+
+    def test_h1_has_space_before(self) -> None:
+        """H1 style has spaceBefore set to separate from the preceding element."""
+        styles = _build_styles()
+        assert styles["h1"].spaceBefore > 0  # Positive spaceBefore creates visual separation
+
+    def test_bullet_style_has_left_indent(self) -> None:
+        """Bullet style has leftIndent set so bullet text is indented from the margin."""
+        styles = _build_styles()
+        assert styles["bullet"].leftIndent > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for _build_cover_header()
+# ---------------------------------------------------------------------------
+
+class TestBuildCoverHeader:
+    """Direct tests for the PDF cover header builder."""
+
+    def test_returns_non_empty_list(self) -> None:
+        """_build_cover_header() returns at least one flowable."""
+        styles = _build_styles()
+        dt = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
+        result = _build_cover_header("https://example.com", dt, styles)
+        assert len(result) > 0  # Cover header must contain at least one element
+
+    def test_contains_paragraph_with_url(self) -> None:
+        """The audited URL appears in at least one Paragraph in the cover header."""
+        styles = _build_styles()
+        dt = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
+        url = "https://www.specific-site.com"
+        result = _build_cover_header(url, dt, styles)
+
+        # Extract text from all Paragraph flowables
+        paragraphs = [f for f in result if isinstance(f, Paragraph)]
+        combined_text = " ".join(p.text for p in paragraphs)
+        assert url in combined_text  # URL must appear in the cover header
+
+    def test_contains_horizontal_rule(self) -> None:
+        """The cover header includes a HRFlowable separating it from the body."""
+        styles = _build_styles()
+        dt = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
+        result = _build_cover_header("https://example.com", dt, styles)
+        has_rule = any(isinstance(f, HRFlowable) for f in result)
+        assert has_rule  # Horizontal rule separates header from body
+
+    def test_contains_date_string(self) -> None:
+        """The formatted date appears somewhere in the cover header paragraphs."""
+        styles = _build_styles()
+        dt = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
+        result = _build_cover_header("https://example.com", dt, styles)
+
+        paragraphs = [f for f in result if isinstance(f, Paragraph)]
+        combined_text = " ".join(p.text for p in paragraphs)
+        assert "2026" in combined_text  # The year appears in the formatted date
+
+    def test_special_chars_in_url_escaped(self) -> None:
+        """URLs with & and ? do not break the cover header rendering."""
+        styles = _build_styles()
+        dt = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
+        # This should not raise a ReportLab XML parsing error
+        result = _build_cover_header("https://example.com/?q=seo&lang=en", dt, styles)
+        assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for _markdown_to_flowables()
+# ---------------------------------------------------------------------------
+
+class TestMarkdownToFlowables:
+    """Direct tests for the Markdown-to-flowables converter."""
+
+    def test_returns_list(self) -> None:
+        """_markdown_to_flowables() always returns a list."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("# Hello", styles)
+        assert isinstance(result, list)
+
+    def test_non_empty_markdown_returns_flowables(self) -> None:
+        """Non-empty Markdown produces at least one flowable."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("# Heading\n\nParagraph.", styles)
+        assert len(result) > 0
+
+    def test_empty_markdown_returns_placeholder(self) -> None:
+        """Empty Markdown returns the placeholder 'No report content.' paragraph."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("", styles)
+        assert len(result) == 1  # Exactly one placeholder
+        assert isinstance(result[0], Paragraph)
+        assert "No report content" in result[0].text
+
+    def test_whitespace_only_returns_placeholder(self) -> None:
+        """Whitespace-only input returns the placeholder paragraph."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("   \n\n   ", styles)
+        assert isinstance(result[0], Paragraph)
+        assert "No report content" in result[0].text
+
+    def test_heading_produces_paragraph(self) -> None:
+        """A Markdown heading produces at least one Paragraph flowable."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("# My Heading", styles)
+        paragraphs = [f for f in result if isinstance(f, Paragraph)]
+        assert len(paragraphs) >= 1  # At least the heading
+
+    def test_bullet_list_produces_list_flowable(self) -> None:
+        """A Markdown bullet list produces a ListFlowable."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("- Item A\n- Item B\n- Item C", styles)
+        list_items = [f for f in result if isinstance(f, ListFlowable)]
+        assert len(list_items) >= 1  # At least one list
+
+    def test_horizontal_rule_produces_hr_flowable(self) -> None:
+        """A Markdown '---' produces a HRFlowable in the output."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("Text before\n\n---\n\nText after", styles)
+        hr_items = [f for f in result if isinstance(f, HRFlowable)]
+        assert len(hr_items) >= 1  # At least one rule
+
+    def test_multiple_headings_produce_multiple_paragraphs(self) -> None:
+        """Multiple headings each become separate Paragraph flowables."""
+        styles = _build_styles()
+        result = _markdown_to_flowables("# H1\n## H2\n### H3", styles)
+        paragraphs = [f for f in result if isinstance(f, Paragraph)]
+        assert len(paragraphs) >= 3  # One per heading
+
+
+# ---------------------------------------------------------------------------
+# Tests for _inline_to_html()
+# ---------------------------------------------------------------------------
+
+class TestInlineToHtml:
+    """Direct unit tests for the inline HTML serialiser."""
+
+    def _tag(self, html: str) -> Tag:
+        """Parse a snippet of HTML and return the root tag."""
+        soup = BeautifulSoup(html, "lxml")
+        return soup.find("body") or soup  # Return the body element as the container
+
+    def test_plain_text_returned(self) -> None:
+        """Plain text inside an element is returned unchanged."""
+        tag = BeautifulSoup("<p>Hello World</p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        assert "Hello World" in result
+
+    def test_bold_wrapped_in_b_tag(self) -> None:
+        """<strong> is mapped to ReportLab <b> tag."""
+        tag = BeautifulSoup("<p>Hello <strong>bold</strong></p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        assert "<b>bold</b>" in result
+
+    def test_b_tag_wrapped_in_b_tag(self) -> None:
+        """<b> is also mapped to ReportLab <b> tag."""
+        tag = BeautifulSoup("<p>Hello <b>bold</b></p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        assert "<b>bold</b>" in result
+
+    def test_italic_wrapped_in_i_tag(self) -> None:
+        """<em> is mapped to ReportLab <i> tag."""
+        tag = BeautifulSoup("<p>Hello <em>italic</em></p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        assert "<i>italic</i>" in result
+
+    def test_code_uses_courier_font(self) -> None:
+        """<code> is rendered with a monospace Courier font tag."""
+        tag = BeautifulSoup("<p>Run <code>pytest</code> now</p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        assert "Courier" in result  # Monospace font for code
+        assert "pytest" in result   # Code text preserved
+
+    def test_special_chars_in_text_escaped(self) -> None:
+        """Plain text with & and < is escaped for safe XML rendering."""
+        tag = BeautifulSoup("<p>Tom &amp; Jerry &lt; 5</p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        # After BeautifulSoup decodes the HTML entities back to chars, _escape_xml re-escapes them
+        assert "&amp;" in result  # & must be escaped
+        assert "&lt;" in result   # < must be escaped
+
+    def test_empty_element_returns_empty_string(self) -> None:
+        """An element with no children returns an empty string."""
+        tag = BeautifulSoup("<p></p>", "lxml").find("p")
+        result = _inline_to_html(tag)
+        assert result == ""  # Nothing to render
+
+
+# ---------------------------------------------------------------------------
+# Tests for _convert_element()
+# ---------------------------------------------------------------------------
+
+class TestConvertElement:
+    """Direct tests for the per-element flowable converter."""
+
+    def _parse(self, html: str, tag_name: str) -> Tag:
+        """Parse HTML and return the named tag."""
+        return BeautifulSoup(html, "lxml").find(tag_name)
+
+    def test_h1_returns_paragraph(self) -> None:
+        """An <h1> element is converted to a Paragraph."""
+        styles = _build_styles()
+        tag = self._parse("<h1>Main Heading</h1>", "h1")
+        result = _convert_element(tag, styles)
+        assert len(result) == 1
+        assert isinstance(result[0], Paragraph)
+
+    def test_h2_returns_paragraph(self) -> None:
+        """An <h2> element is converted to a Paragraph."""
+        styles = _build_styles()
+        tag = self._parse("<h2>Sub Heading</h2>", "h2")
+        result = _convert_element(tag, styles)
+        assert isinstance(result[0], Paragraph)
+
+    def test_p_returns_paragraph(self) -> None:
+        """A <p> element is converted to a Paragraph."""
+        styles = _build_styles()
+        tag = self._parse("<p>Body text here.</p>", "p")
+        result = _convert_element(tag, styles)
+        assert isinstance(result[0], Paragraph)
+
+    def test_empty_p_returns_empty_list(self) -> None:
+        """An empty <p></p> element produces no flowables."""
+        styles = _build_styles()
+        tag = self._parse("<p>   </p>", "p")
+        result = _convert_element(tag, styles)
+        assert result == []  # Empty paragraph discarded
+
+    def test_ul_returns_list_flowable(self) -> None:
+        """A <ul> element is converted to a ListFlowable."""
+        styles = _build_styles()
+        tag = self._parse("<ul><li>Item A</li><li>Item B</li></ul>", "ul")
+        result = _convert_element(tag, styles)
+        assert len(result) >= 1
+        assert isinstance(result[0], ListFlowable)
+
+    def test_ol_returns_list_flowable(self) -> None:
+        """An <ol> element is converted to a ListFlowable."""
+        styles = _build_styles()
+        tag = self._parse("<ol><li>First</li><li>Second</li></ol>", "ol")
+        result = _convert_element(tag, styles)
+        assert isinstance(result[0], ListFlowable)
+
+    def test_hr_returns_hr_flowable_and_spacers(self) -> None:
+        """An <hr> element is converted to a HRFlowable with surrounding Spacers."""
+        styles = _build_styles()
+        tag = self._parse("<hr/>", "hr")
+        result = _convert_element(tag, styles)
+        hr_items = [f for f in result if isinstance(f, HRFlowable)]
+        assert len(hr_items) == 1  # Exactly one rule
+
+    def test_empty_ul_returns_empty_list(self) -> None:
+        """An empty <ul></ul> produces no flowables."""
+        styles = _build_styles()
+        tag = self._parse("<ul></ul>", "ul")
+        result = _convert_element(tag, styles)
+        assert result == []  # No items, no flowable
