@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     )
 
     gemini_model: str = Field(
-        default="gemini-1.5-flash",  # Default to the fast, cost-effective Gemini model
+        default="gemini-2.5-flash",  # Updated: gemini-1.5-flash is deprecated; gemini-2.5-flash is the current fast model
         description="Gemini model name to use for LLM report generation",
     )
 
