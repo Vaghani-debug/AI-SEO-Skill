@@ -321,3 +321,289 @@ class TestFetchSite:
             result = await fetch_site("https://example.com", settings)
 
         assert len(result.all_resources) >= 3  # At minimum: homepage, robots.txt, sitemap.xml
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for _fetch_resource() — HTTP status variants
+# ---------------------------------------------------------------------------
+
+class TestFetchResourceStatusCodes:
+    """Tests covering various HTTP status code behaviours."""
+
+    async def test_500_server_error_recorded_not_raised(self) -> None:
+        """A 500 Internal Server Error is stored as is_success=False, not raised."""
+        mock_response = _make_mock_response(500, "Internal Server Error", "https://example.com")
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=mock_response)
+
+        result = await _fetch_resource(client, "https://example.com", "homepage", 10)
+
+        assert result.is_success is False    # 5xx is not a success
+        assert result.status_code == 500      # Status code preserved
+        assert result.is_fetched is True      # Attempt was made
+        assert result.error_message == ""     # 500 is data, not an exception message
+
+    async def test_503_service_unavailable_recorded(self) -> None:
+        """A 503 Service Unavailable is stored correctly."""
+        mock_response = _make_mock_response(503, "Service Unavailable", "https://example.com")
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=mock_response)
+
+        result = await _fetch_resource(client, "https://example.com", "homepage", 10)
+
+        assert result.is_success is False
+        assert result.status_code == 503
+
+    async def test_301_redirect_final_url_captured(self) -> None:
+        """When a redirect is followed, final_url reflects the destination."""
+        # httpx follows redirects automatically; the response.url is the final URL
+        mock_response = _make_mock_response(200, "<html/>", "https://www.example.com")
+        # URL in the response differs from the requested URL (simulates HTTP→HTTPS redirect)
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=mock_response)
+
+        result = await _fetch_resource(client, "http://example.com", "homepage", 10)
+
+        assert result.is_success is True
+        assert result.final_url == "https://www.example.com"  # Final URL after redirect stored
+        assert result.url == "http://example.com"             # Original requested URL preserved
+
+    async def test_url_preserved_in_error_resource(self) -> None:
+        """The original request URL is always stored, even on network failure."""
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+        requested_url = "https://unreachable.example.com"
+
+        result = await _fetch_resource(client, requested_url, "homepage", 10)
+
+        assert result.url == requested_url      # URL preserved
+        assert result.label == "homepage"       # Label preserved
+        assert result.is_success is False       # Marked as failure
+
+    async def test_label_preserved_in_error_resource(self) -> None:
+        """The label is preserved on every error type."""
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+
+        result = await _fetch_resource(client, "https://example.com/robots.txt", "robots.txt", 5)
+
+        assert result.label == "robots.txt"     # Label always stored
+
+    async def test_status_code_zero_on_network_error(self) -> None:
+        """status_code is 0 when no HTTP response is received."""
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("DNS failure"))
+
+        result = await _fetch_resource(client, "https://example.com", "homepage", 10)
+
+        assert result.status_code == 0          # No HTTP code available
+
+    async def test_error_message_nonempty_on_network_error(self) -> None:
+        """error_message is populated for every type of network error."""
+        for exc in [
+            httpx.TimeoutException("Timeout"),
+            httpx.ConnectError("DNS failure"),
+            httpx.TooManyRedirects("Too many redirects"),
+        ]:
+            client = AsyncMock()
+            client.get = AsyncMock(side_effect=exc)
+            result = await _fetch_resource(client, "https://example.com", "homepage", 5)
+            assert result.error_message != "", f"Expected error_message for {type(exc).__name__}"
+
+    async def test_error_message_empty_on_http_error(self) -> None:
+        """error_message is empty when HTTP responded (even with 4xx/5xx)."""
+        mock_response = _make_mock_response(404, "Not Found")
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=mock_response)
+
+        result = await _fetch_resource(client, "https://example.com/missing", "page", 10)
+
+        assert result.error_message == ""       # 404 is data, not an application error
+        assert result.is_fetched is True
+        assert result.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for FetchedResource — model defaults
+# ---------------------------------------------------------------------------
+
+class TestFetchedResourceDefaults:
+    """Tests that FetchedResource initialises with sensible default values."""
+
+    def test_default_values(self) -> None:
+        """FetchedResource defaults are safe and sensible."""
+        r = FetchedResource(url="https://example.com", label="homepage")
+
+        assert r.final_url == ""        # Empty until a response is received
+        assert r.status_code == 0       # 0 means no response yet
+        assert r.content == ""          # No content by default
+        assert r.is_success is False    # Default to failed state
+        assert r.is_fetched is False    # Default to not attempted
+        assert r.error_message == ""    # No error message by default
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for _extract_sitemaps_from_robots — edge cases
+# ---------------------------------------------------------------------------
+
+class TestExtractSitemapsEdgeCases:
+    """Edge-case handling in the robots.txt sitemap extractor."""
+
+    def test_empty_string_returns_empty_list(self) -> None:
+        """An empty string returns an empty list without raising."""
+        result = _extract_sitemaps_from_robots("")
+        assert result == []
+
+    def test_only_comments_returns_empty_list(self) -> None:
+        """A robots.txt containing only comments has no sitemaps."""
+        content = "# This is a comment\n# Another comment\n"
+        result = _extract_sitemaps_from_robots(content)
+        assert result == []
+
+    def test_windows_line_endings_handled(self) -> None:
+        """Windows \\r\\n line endings do not break sitemap extraction."""
+        content = "User-agent: *\r\nSitemap: https://example.com/sitemap.xml\r\n"
+        result = _extract_sitemaps_from_robots(content)
+        assert len(result) == 1
+        assert result[0] == "https://example.com/sitemap.xml"  # URL is clean (no \\r)
+
+    def test_http_sitemap_accepted(self) -> None:
+        """http:// sitemaps are accepted as well as https://."""
+        content = "Sitemap: http://example.com/sitemap.xml\n"
+        result = _extract_sitemaps_from_robots(content)
+        assert len(result) == 1
+        assert result[0].startswith("http://")
+
+    def test_whitespace_around_url_stripped(self) -> None:
+        """Extra spaces around the sitemap URL are stripped."""
+        content = "Sitemap:  https://example.com/sitemap.xml  \n"
+        result = _extract_sitemaps_from_robots(content)
+        assert result == ["https://example.com/sitemap.xml"]  # Clean URL returned
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for fetch_site() — missing resources
+# ---------------------------------------------------------------------------
+
+class TestFetchSiteMissingResources:
+    """Tests that fetch_site handles missing robots.txt and sitemap gracefully."""
+
+    async def test_robots_txt_404_still_returns_result(self, settings: Settings) -> None:
+        """A 404 robots.txt does not abort the audit; the result is still returned."""
+        responses = {
+            "https://example.com": _make_mock_response(200, "<html/>"),
+            "https://example.com/robots.txt": _make_mock_response(404, "Not Found"),
+            "https://example.com/sitemap.xml": _make_mock_response(200, "<urlset/>"),
+        }
+
+        with patch("src.services.fetch_service.httpx.AsyncClient") as mock_client_class:
+            mock_instance = _make_async_client_mock(responses)
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await fetch_site("https://example.com", settings)
+
+        assert isinstance(result, SiteFetchResult)         # Result returned despite 404 robots.txt
+        assert result.robots_txt.is_success is False        # 404 recorded
+        assert result.robots_txt.status_code == 404         # Status code preserved
+        assert result.extra_sitemaps == []                  # No extras if robots.txt missing
+
+    async def test_sitemap_xml_404_still_returns_result(self, settings: Settings) -> None:
+        """A 404 sitemap.xml does not abort the audit."""
+        responses = {
+            "https://example.com": _make_mock_response(200, "<html/>"),
+            "https://example.com/robots.txt": _make_mock_response(200, "User-agent: *\n"),
+            "https://example.com/sitemap.xml": _make_mock_response(404, "Not Found"),
+        }
+
+        with patch("src.services.fetch_service.httpx.AsyncClient") as mock_client_class:
+            mock_instance = _make_async_client_mock(responses)
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await fetch_site("https://example.com", settings)
+
+        assert isinstance(result, SiteFetchResult)
+        assert result.sitemap_xml.is_success is False   # 404 sitemap recorded
+        assert result.sitemap_xml.status_code == 404
+
+    async def test_standard_sitemap_not_duplicated_in_extras(self, settings: Settings) -> None:
+        """When robots.txt lists /sitemap.xml, it is not fetched a second time."""
+        mock_robots = "User-agent: *\nSitemap: https://example.com/sitemap.xml\n"
+        responses = {
+            "https://example.com": _make_mock_response(200, "<html/>"),
+            "https://example.com/robots.txt": _make_mock_response(200, mock_robots),
+            "https://example.com/sitemap.xml": _make_mock_response(200, "<urlset/>"),
+        }
+
+        with patch("src.services.fetch_service.httpx.AsyncClient") as mock_client_class:
+            mock_instance = _make_async_client_mock(responses)
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await fetch_site("https://example.com", settings)
+
+        # /sitemap.xml is already fetched as sitemap_xml — it must not appear in extra_sitemaps too
+        assert result.extra_sitemaps == []
+        assert len(result.all_sitemaps) == 1   # Only one sitemap in total
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for SiteFetchResult — property behaviour
+# ---------------------------------------------------------------------------
+
+class TestSiteFetchResultProperties:
+    """Tests for the all_sitemaps and all_resources computed properties."""
+
+    def _make_resource(self, url: str, label: str, success: bool = True) -> FetchedResource:
+        """Helper to create a FetchedResource for property tests."""
+        return FetchedResource(
+            url=url,
+            label=label,
+            final_url=url,
+            status_code=200 if success else 404,
+            content="<xml/>",
+            is_success=success,
+            is_fetched=True,
+        )
+
+    def test_all_sitemaps_includes_sitemap_xml_when_fetched(self) -> None:
+        """all_sitemaps includes sitemap_xml when it was fetched (even if 404)."""
+        result = SiteFetchResult(
+            base_url="https://example.com",
+            homepage=self._make_resource("https://example.com", "homepage"),
+            robots_txt=self._make_resource("https://example.com/robots.txt", "robots.txt"),
+            sitemap_xml=self._make_resource("https://example.com/sitemap.xml", "sitemap.xml"),
+            extra_sitemaps=[],
+        )
+        # sitemap_xml was fetched → it should appear in all_sitemaps
+        assert len(result.all_sitemaps) == 1
+        assert result.all_sitemaps[0].label == "sitemap.xml"
+
+    def test_all_sitemaps_includes_extra_sitemaps(self) -> None:
+        """all_sitemaps combines sitemap_xml and extra_sitemaps."""
+        extra = self._make_resource("https://example.com/sitemap/posts.xml", "sitemap:posts")
+        result = SiteFetchResult(
+            base_url="https://example.com",
+            homepage=self._make_resource("https://example.com", "homepage"),
+            robots_txt=self._make_resource("https://example.com/robots.txt", "robots.txt"),
+            sitemap_xml=self._make_resource("https://example.com/sitemap.xml", "sitemap.xml"),
+            extra_sitemaps=[extra],
+        )
+        assert len(result.all_sitemaps) == 2           # sitemap.xml + extra
+        urls = [s.url for s in result.all_sitemaps]
+        assert "https://example.com/sitemap.xml" in urls
+        assert "https://example.com/sitemap/posts.xml" in urls
+
+    def test_all_resources_includes_homepage_and_robots(self) -> None:
+        """all_resources always contains homepage and robots.txt."""
+        result = SiteFetchResult(
+            base_url="https://example.com",
+            homepage=self._make_resource("https://example.com", "homepage"),
+            robots_txt=self._make_resource("https://example.com/robots.txt", "robots.txt"),
+            sitemap_xml=self._make_resource("https://example.com/sitemap.xml", "sitemap.xml"),
+        )
+        labels = [r.label for r in result.all_resources]
+        assert "homepage" in labels
+        assert "robots.txt" in labels
+
