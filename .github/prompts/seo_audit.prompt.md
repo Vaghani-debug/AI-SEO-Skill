@@ -2,7 +2,7 @@
 
 ## Instructions
 
-Use the installed `seo-audit` skill as the audit methodology and framework for this audit. Apply its priority order, technical checks, on-page checks, content quality assessment, and output format rules throughout.
+Use the installed `seo-audit-skill` skill as the audit methodology and framework for this audit. Apply its priority order, technical checks, on-page checks, content quality assessment, and output format rules throughout.
 
 Follow `docs/REPORT_SPECIFICATION.md` as the source of truth for the final report structure.
 

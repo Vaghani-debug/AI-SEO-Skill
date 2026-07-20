@@ -11,19 +11,12 @@ Owner: Product Owner
 This document defines the official SEO scoring methodology for the AI SEO Agent.
 
 The scoring engine converts hundreds of technical SEO checks into:
-
 • Category Scores
-
 • Overall SEO Score
-
 • Website Health Grade
-
 • Issue Priorities
-
 • Business Impact
-
 The scoring engine must always produce deterministic results.
-
 Running the audit multiple times on an unchanged website should always produce identical scores.
 
 ---
@@ -47,11 +40,8 @@ Transparency
 Every score deduction must be explainable.
 
 The user should always know:
-
 • Why points were deducted
-
 • Which issue caused the deduction
-
 • How to recover those points
 
 ---
@@ -65,11 +55,8 @@ Not every issue has equal importance.
 Missing ALT text is not as serious as:
 
 • Blocked robots.txt
-
 • Noindex
-
 • Broken canonical
-
 • 5xx errors
 
 ---
@@ -79,9 +66,7 @@ Missing ALT text is not as serious as:
 Evidence Based
 
 Only measurable issues should affect the score.
-
 AI opinions must never directly reduce the score.
-
 AI only explains findings.
 
 ---
@@ -91,9 +76,7 @@ AI only explains findings.
 Fairness
 
 Small websites should not be unfairly penalized.
-
 Large enterprise websites should not receive inflated scores simply because they have more pages.
-
 Scores should be normalized whenever possible.
 
 ---
@@ -103,43 +86,24 @@ Scores should be normalized whenever possible.
 The platform produces one score.
 
 Range
-
 0 – 100
-
 Display
-
 Large circular gauge.
-
 Colour
-
 90–100
-
 Green
-
 Excellent
-
 80–89
-
 Light Green
-
 Good
-
 70–79
-
 Yellow
-
 Needs Improvement
-
 60–69
-
 Orange
-
 Poor
-
 Below 60
-
 Red
-
 Critical
 
 ---
