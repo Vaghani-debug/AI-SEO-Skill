@@ -49,6 +49,19 @@ from src.services.prompt_loader import PromptContext  # Loaded guidance files co
 # Module-level logger
 logger = logging.getLogger(__name__)  # Resolves to "src.services.report_service"
 
+# Minimum structure guardrails for the final markdown output.
+# We log missing parts for observability but do not fail the audit request.
+_REQUIRED_REPORT_PART_HEADINGS: tuple[str, ...] = (
+    "# PART 1:",
+    "# PART 2:",
+    "# PART 3:",
+    "# PART 4:",
+    "# PART 5:",
+    "# PART 6:",
+    "# PART 7:",
+    "# PART 8:",
+)
+
 
 # ---------------------------------------------------------------------------
 # Result data model
@@ -140,7 +153,7 @@ async def generate_report(
     context_with_url = PromptContext(
         audit_prompt=audit_prompt_with_url,
         seo_skill=prompt_context.seo_skill,
-        report_specification=prompt_context.report_specification,
+        master_report_structure=prompt_context.master_report_structure,
         ai_guidelines=prompt_context.ai_guidelines,
     )
 
@@ -150,7 +163,11 @@ async def generate_report(
     # The combined system prompt includes all four guidance files assembled in priority order:
     # AI guidelines → SEO methodology → Report spec → Audit prompt (with real URL)
 
-    user_message: str = _build_user_message(normalized_url, evidence_text)
+    user_message: str = _build_user_message(
+        normalized_url=normalized_url,
+        evidence_text=evidence_text,
+        master_report_structure=prompt_context.master_report_structure,
+    )
     # The user message presents the verified evidence and asks for the report
 
     logger.debug(
@@ -166,6 +183,41 @@ async def generate_report(
         user_message=user_message,
         settings=settings,
     )
+
+    # Log structural drift if the model omits required report parts.
+    # This keeps the request successful while making inconsistency observable.
+    missing_parts: list[str] = _missing_required_report_parts(markdown_report)
+    if missing_parts:
+        logger.warning(
+            "Generated report for %s is missing required sections: %s",
+            normalized_url,
+            ", ".join(missing_parts),
+        )
+
+        # One retry only when the model produced a partially structured report.
+        # If all required headings are missing, a retry often repeats the same failure.
+        if len(missing_parts) < len(_REQUIRED_REPORT_PART_HEADINGS):
+            retry_user_message: str = _build_retry_user_message(user_message, missing_parts)
+            markdown_report = await _call_gemini(
+                system_prompt=system_prompt,
+                user_message=retry_user_message,
+                settings=settings,
+            )
+
+            missing_parts = _missing_required_report_parts(markdown_report)
+            if missing_parts:
+                logger.warning(
+                    "Retry report for %s is still missing required sections: %s",
+                    normalized_url,
+                    ", ".join(missing_parts),
+                )
+            else:
+                logger.info("Retry report for %s now includes all required PART sections", normalized_url)
+        else:
+            logger.warning(
+                "Retry skipped for %s because all required PART headings were missing in first response",
+                normalized_url,
+            )
 
     # --- Step 6: Assemble and return the result ----------------------------
 
@@ -422,7 +474,11 @@ def _format_evidence(normalized_url: str, evidence: AuditEvidence) -> str:
     # Join all lines into a single string for the LLM user message
 
 
-def _build_user_message(normalized_url: str, evidence_text: str) -> str:
+def _build_user_message(
+    normalized_url: str,
+    evidence_text: str,
+    master_report_structure: str | None = None,
+) -> str:
     """
     Build the user-turn message for the Gemini conversation.
 
@@ -433,10 +489,29 @@ def _build_user_message(normalized_url: str, evidence_text: str) -> str:
     Args:
         normalized_url: The website URL being audited.
         evidence_text: The formatted evidence text from _format_evidence().
+        master_report_structure: Optional full report template text that must
+                                 be reproduced verbatim by the LLM.
 
     Returns:
         A complete user message string ready to send to the LLM.
     """
+    if master_report_structure:
+        return (
+            f"Generate the SEO audit report for: {normalized_url}\n\n"
+            "## MANDATORY OUTPUT RULES\n"
+            "- Reproduce the provided template exactly in the same order.\n"
+            "- Keep all headings, sub-headings, and table column names unchanged.\n"
+            "- Do not add, remove, rename, or reorder sections.\n"
+            "- Fill every section/table cell using verified evidence only.\n"
+            "- If evidence is unavailable, write either 'Not Detected' or 'Could not be verified in this audit.'\n"
+            "- Do not output any extra wrapper text before or after the report.\n\n"
+            "## TEMPLATE TO FILL (VERBATIM STRUCTURE)\n\n"
+            f"{master_report_structure}\n\n"
+            "---\n\n"
+            "## VERIFIED EVIDENCE\n\n"
+            f"{evidence_text}"
+        )
+
     return (
         f"Please generate a complete, professional SEO audit report for: {normalized_url}\n\n"
         f"Use only the verified evidence below. "
@@ -444,4 +519,41 @@ def _build_user_message(normalized_url: str, evidence_text: str) -> str:
         f"For every field listed under 'Fields That Could Not Be Verified', "
         f"write exactly: \"Could not be verified in this audit.\"\n\n"
         f"{evidence_text}"
+    )
+
+
+def _missing_required_report_parts(markdown_report: str) -> list[str]:
+    """
+    Return required PART headings that are missing from the generated report.
+
+    This is a lightweight validation helper for observability only.
+    """
+    return [
+        heading
+        for heading in _REQUIRED_REPORT_PART_HEADINGS
+        if heading not in markdown_report
+    ]
+
+
+def _build_retry_user_message(original_user_message: str, missing_parts: list[str]) -> str:
+    """
+    Build a second-pass instruction that explicitly demands missing headings.
+
+    Args:
+        original_user_message: The original report-generation user message.
+        missing_parts: Required PART headings not found in the first output.
+
+    Returns:
+        A reinforced user message for one additional LLM attempt.
+    """
+    missing_text: str = "\n".join(f"- {heading}" for heading in missing_parts)
+
+    return (
+        f"{original_user_message}\n\n"
+        "## RETRY INSTRUCTION (MANDATORY)\n"
+        "Your previous output was missing required report parts.\n"
+        "Regenerate the full report using the exact same template structure.\n"
+        "Do not omit any required PART heading.\n"
+        "The following headings were missing and must be present exactly:\n"
+        f"{missing_text}\n"
     )

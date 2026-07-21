@@ -108,8 +108,8 @@ class TestLoadPromptContextIntegration:
 class TestCombinedSystemPrompt:
     """Tests for the combined_system_prompt property that assembles the LLM input."""
 
-    def test_combined_contains_all_four_sections(self) -> None:
-        """combined_system_prompt includes all four guidance file sections."""
+    def test_combined_contains_system_guidance_sections(self) -> None:
+        """combined_system_prompt includes the three system-level guidance sources."""
         context = PromptContext(
             audit_prompt="AUDIT_PROMPT",
             seo_skill="SEO_SKILL",
@@ -120,8 +120,8 @@ class TestCombinedSystemPrompt:
 
         assert "AUDIT_PROMPT" in combined        # Audit prompt included
         assert "SEO_SKILL" in combined           # SEO skill included
-        assert "REPORT_STRUCTURE" in combined    # Report structure included
         assert "AI_GUIDELINES" in combined       # AI guidelines included
+        assert "REPORT_STRUCTURE" not in combined  # Template belongs in the user message
 
     def test_combined_sections_separated_by_rule(self) -> None:
         """Sections in combined_system_prompt are separated by horizontal rules."""
@@ -328,13 +328,14 @@ class TestRealFileContent:
         result = load_prompt_context()
         assert "MASTER_REPORT_STRUCTURE.md" in result.audit_prompt
 
-    def test_combined_prompt_includes_all_guidance_sources(self) -> None:
-        """The combined prompt includes the loader-provided guidance sources."""
+    def test_combined_prompt_includes_system_guidance_sources(self) -> None:
+        """The combined prompt includes the system-level guidance sources."""
         result = load_prompt_context()
         combined = result.combined_system_prompt
         assert "AI Report Guidelines" in combined
         assert "SEO Audit Methodology" in combined
-        assert "Enterprise Report Template" in combined
+        assert "## Audit Prompt" in combined
+        assert result.master_report_structure not in combined
 
     def test_seo_skill_contains_priority_order(self) -> None:
         """SKILL.md must describe the audit priority order."""
@@ -428,12 +429,12 @@ class TestPromptContextDataclass:
         )
         assert "SEO Audit Methodology" in ctx.combined_system_prompt
 
-    def test_combined_contains_section_header_report_template(self) -> None:
-        """combined_system_prompt includes the enterprise report template header."""
+    def test_combined_excludes_report_template(self) -> None:
+        """combined_system_prompt excludes the template reserved for the user message."""
         ctx = PromptContext(
             audit_prompt="A", seo_skill="B", master_report_structure="C", ai_guidelines="D"
         )
-        assert "Enterprise Report Template" in ctx.combined_system_prompt
+        assert "C" not in ctx.combined_system_prompt
 
     def test_combined_contains_section_header_audit_prompt(self) -> None:
         """combined_system_prompt includes the 'Audit Prompt' section header."""
@@ -460,13 +461,13 @@ class TestPromptContextDataclass:
         assert audit_pos > structure_pos
         assert audit_pos > guide_pos
 
-    def test_combined_seo_skill_between_guidelines_and_report_template(self) -> None:
-        """SEO skill appears after guidelines but before the report template."""
+    def test_combined_audit_prompt_appears_after_system_guidance(self) -> None:
+        """The audit prompt appears after the guidelines and methodology."""
         ctx = PromptContext(
             audit_prompt="AP", seo_skill="SK", master_report_structure="MRS", ai_guidelines="AG"
         )
         combined = ctx.combined_system_prompt
-        assert combined.find("AG") < combined.find("SK") < combined.find("MRS")
+        assert combined.find("AG") < combined.find("SK") < combined.find("AP")
 
 
 # ---------------------------------------------------------------------------

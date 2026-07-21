@@ -115,10 +115,9 @@ class PromptContext:
             # Section 2: SEO audit methodology defines what to check and how to prioritise
             "## SEO Audit Methodology (Skill)\n\n" + self.seo_skill,
 
-            # Section 3: Report structure defines the expected output shape
-            "## Enterprise Report Template (Single Source of Truth)\n\n" + self.master_report_structure,
-
-            # Section 4: The audit prompt defines the role, objective, and exact output format
+            # Section 3: The audit prompt defines the role, objective, and exact output format.
+            # The full MASTER_REPORT_STRUCTURE template is intentionally excluded here and
+            # passed in the user message so the model fills the template verbatim.
             "## Audit Prompt\n\n" + self.audit_prompt,
         ]
 

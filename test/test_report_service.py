@@ -50,7 +50,7 @@ def prompt_context() -> PromptContext:
     return PromptContext(
         audit_prompt="You are an SEO consultant. Audit {{website_url}}.",
         seo_skill="Priority: Crawlability, Technical, On-Page, Content.",
-        report_specification="Report sections: Executive Summary, Technical SEO.",
+        master_report_structure="Report sections: Executive Summary, Technical SEO.",
         ai_guidelines="Never invent findings. Use verified evidence only.",
     )
 
@@ -249,6 +249,44 @@ class TestGenerateReportSuccess:
         mock_genai.configure.assert_called_once_with(api_key=settings.gemini_api_key)
         # Verify the API key is always passed before making a call
 
+    async def test_retries_once_when_report_has_partial_required_parts(
+        self, settings: Settings, prompt_context: PromptContext
+    ) -> None:
+        """A partial PART structure triggers exactly one retry and returns retry output."""
+        evidence = _make_evidence()
+
+        first_response = "# PART 1: FULL WEBSITE AUDIT\n\nOnly part 1 is present."
+        second_response = (
+            "# PART 1: FULL WEBSITE AUDIT\n"
+            "# PART 2: TECHNICAL SEO AUDIT\n"
+            "# PART 3: ON-PAGE SEO AUDIT\n"
+            "# PART 4: COMPLETE KEYWORD STRATEGY\n"
+            "# PART 5: COMPETITOR SEO ANALYSIS\n"
+            "# PART 6: OFF-PAGE SEO & AUTHORITY BUILDING\n"
+            "# PART 7: CONTENT STRATEGY & CONTENT GAP ANALYSIS\n"
+            "# PART 8: AI SEARCH & GENERATIVE ENGINE OPTIMIZATION (GEO)\n"
+        )
+
+        call_index = 0
+
+        def generate_side_effect(_: str) -> MagicMock:
+            nonlocal call_index
+            call_index += 1
+            response = MagicMock()
+            response.text = first_response if call_index == 1 else second_response
+            return response
+
+        mock_model = MagicMock()
+        mock_model.generate_content.side_effect = generate_side_effect
+
+        with patch("src.services.report_service.genai") as mock_genai:
+            mock_genai.GenerativeModel.return_value = mock_model
+
+            result = await generate_report("https://example.com", evidence, prompt_context, settings)
+
+        assert mock_model.generate_content.call_count == 2
+        assert result.markdown_report == second_response
+
 
 # ---------------------------------------------------------------------------
 # Tests for generate_report() — error paths
@@ -391,6 +429,19 @@ class TestFormatEvidence:
 
 class TestBuildUserMessage:
     """Tests for the user message builder."""
+
+    def test_includes_master_report_template_when_provided(self) -> None:
+        """The full master template is sent in the user message for verbatim completion."""
+        template = "# PART 1: TEMPLATE_MARKER"
+        msg = _build_user_message(
+            "https://example.com",
+            "EVIDENCE",
+            master_report_structure=template,
+        )
+
+        assert template in msg
+        assert "TEMPLATE TO FILL" in msg
+        assert "VERIFIED EVIDENCE" in msg
 
     def test_contains_url(self) -> None:
         """The user message includes the website URL."""
