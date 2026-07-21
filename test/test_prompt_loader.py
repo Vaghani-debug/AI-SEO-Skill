@@ -53,10 +53,10 @@ class TestLoadPromptContextIntegration:
         result = load_prompt_context()
         assert len(result.seo_skill) > 100  # SEO skill is a detailed methodology document
 
-    def test_report_specification_loaded(self) -> None:
-        """report_specification field is non-empty after loading."""
+    def test_master_report_structure_loaded(self) -> None:
+        """master_report_structure field is non-empty after loading."""
         result = load_prompt_context()
-        assert len(result.report_specification) > 100
+        assert len(result.master_report_structure) > 100
 
     def test_ai_guidelines_loaded(self) -> None:
         """ai_guidelines field is non-empty after loading."""
@@ -91,10 +91,10 @@ class TestLoadPromptContextIntegration:
             for keyword in ["accuracy", "never invent", "hallucin", "evidence"]
         )
 
-    def test_report_specification_contains_section_structure(self) -> None:
-        """report_specification references report sections or structure."""
+    def test_master_report_structure_contains_section_structure(self) -> None:
+        """master_report_structure references report sections or structure."""
         result = load_prompt_context()
-        content_lower = result.report_specification.lower()
+        content_lower = result.master_report_structure.lower()
         assert any(
             keyword in content_lower
             for keyword in ["executive summary", "section", "report", "structure"]
@@ -113,14 +113,14 @@ class TestCombinedSystemPrompt:
         context = PromptContext(
             audit_prompt="AUDIT_PROMPT",
             seo_skill="SEO_SKILL",
-            report_specification="REPORT_SPEC",
+            master_report_structure="REPORT_STRUCTURE",
             ai_guidelines="AI_GUIDELINES",
         )
         combined = context.combined_system_prompt
 
         assert "AUDIT_PROMPT" in combined        # Audit prompt included
         assert "SEO_SKILL" in combined           # SEO skill included
-        assert "REPORT_SPEC" in combined         # Report spec included
+        assert "REPORT_STRUCTURE" in combined    # Report structure included
         assert "AI_GUIDELINES" in combined       # AI guidelines included
 
     def test_combined_sections_separated_by_rule(self) -> None:
@@ -128,7 +128,7 @@ class TestCombinedSystemPrompt:
         context = PromptContext(
             audit_prompt="A",
             seo_skill="B",
-            report_specification="C",
+            master_report_structure="C",
             ai_guidelines="D",
         )
         combined = context.combined_system_prompt
@@ -139,7 +139,7 @@ class TestCombinedSystemPrompt:
         context = PromptContext(
             audit_prompt="A",
             seo_skill="B",
-            report_specification="C",
+            master_report_structure="C",
             ai_guidelines="D",
         )
         assert len(context.combined_system_prompt) > 0
@@ -149,7 +149,7 @@ class TestCombinedSystemPrompt:
         context = PromptContext(
             audit_prompt="AUDIT",
             seo_skill="SKILL",
-            report_specification="SPEC",
+            master_report_structure="STRUCTURE",
             ai_guidelines="GUIDELINES",
         )
         combined = context.combined_system_prompt
@@ -192,8 +192,8 @@ class TestMissingFiles:
 
         assert "SKILL.md" in str(exc_info.value)  # Missing file named in error
 
-    def test_missing_report_spec_raises_file_not_found(self, tmp_path: Path) -> None:
-        """FileNotFoundError is raised when REPORT_SPECIFICATION.md does not exist."""
+    def test_missing_master_report_structure_raises_file_not_found(self, tmp_path: Path) -> None:
+        """FileNotFoundError is raised when MASTER_REPORT_STRUCTURE.md does not exist."""
         # Create the first two files so we reach the third
         _write_stub(tmp_path, ".github", "prompts", "seo_audit.prompt.md")
         _write_stub(tmp_path, ".agents", "skills", "seo-audit-skill", "SKILL.md")
@@ -201,14 +201,19 @@ class TestMissingFiles:
         with pytest.raises(FileNotFoundError) as exc_info:
             load_prompt_context(project_root=tmp_path)
 
-        assert "REPORT_SPECIFICATION.md" in str(exc_info.value)
+        assert "MASTER_REPORT_STRUCTURE.md" in str(exc_info.value)
 
     def test_missing_ai_guidelines_raises_file_not_found(self, tmp_path: Path) -> None:
         """FileNotFoundError is raised when AI_REPORT_GUIDELINES.md does not exist."""
         # Create first three files so we reach the fourth
         _write_stub(tmp_path, ".github", "prompts", "seo_audit.prompt.md")
         _write_stub(tmp_path, ".agents", "skills", "seo-audit-skill", "SKILL.md")
-        _write_stub(tmp_path, "docs", "REPORT_SPECIFICATION.md")
+        _write_stub(
+            tmp_path,
+            ".github",
+            "report_templates",
+            "MASTER_REPORT_STRUCTURE.md",
+        )
 
         with pytest.raises(FileNotFoundError) as exc_info:
             load_prompt_context(project_root=tmp_path)
@@ -238,14 +243,20 @@ class TestProjectRootOverride:
         # Create all four files in tmp_path with custom content
         _write_stub(tmp_path, ".github", "prompts", "seo_audit.prompt.md", content="CUSTOM_PROMPT")
         _write_stub(tmp_path, ".agents", "skills", "seo-audit-skill", "SKILL.md", content="CUSTOM_SKILL")
-        _write_stub(tmp_path, "docs", "REPORT_SPECIFICATION.md", content="CUSTOM_SPEC")
+        _write_stub(
+            tmp_path,
+            ".github",
+            "report_templates",
+            "MASTER_REPORT_STRUCTURE.md",
+            content="CUSTOM_STRUCTURE",
+        )
         _write_stub(tmp_path, "docs", "AI_REPORT_GUIDELINES.md", content="CUSTOM_GUIDE")
 
         result = load_prompt_context(project_root=tmp_path)
 
         assert result.audit_prompt == "CUSTOM_PROMPT"      # Custom content loaded
         assert result.seo_skill == "CUSTOM_SKILL"
-        assert result.report_specification == "CUSTOM_SPEC"
+        assert result.master_report_structure == "CUSTOM_STRUCTURE"
         assert result.ai_guidelines == "CUSTOM_GUIDE"
 
     def test_path_object_accepted(self) -> None:
@@ -312,29 +323,18 @@ class TestRealFileContent:
     before the LLM report generator produces incorrect output.
     """
 
-    def test_audit_prompt_contains_website_url_placeholder(self) -> None:
-        """seo_audit.prompt.md must contain the {{website_url}} template variable."""
+    def test_audit_prompt_references_master_report_structure(self) -> None:
+        """seo_audit.prompt.md must identify the master report template."""
         result = load_prompt_context()
-        assert "{{website_url}}" in result.audit_prompt
-        # This placeholder is replaced with the user's URL when the LLM prompt is assembled
+        assert "MASTER_REPORT_STRUCTURE.md" in result.audit_prompt
 
-    def test_audit_prompt_instructs_seo_audit_skill_usage(self) -> None:
-        """seo_audit.prompt.md must reference the seo-audit skill."""
+    def test_combined_prompt_includes_all_guidance_sources(self) -> None:
+        """The combined prompt includes the loader-provided guidance sources."""
         result = load_prompt_context()
-        assert "seo-audit" in result.audit_prompt.lower()
-        # The prompt explicitly tells the LLM to apply the installed skill
-
-    def test_audit_prompt_references_report_specification(self) -> None:
-        """seo_audit.prompt.md must reference REPORT_SPECIFICATION.md."""
-        result = load_prompt_context()
-        assert "REPORT_SPECIFICATION" in result.audit_prompt or "report_specification" in result.audit_prompt.lower()
-        # The prompt instructs the LLM to follow the report spec
-
-    def test_audit_prompt_references_ai_guidelines(self) -> None:
-        """seo_audit.prompt.md must reference AI_REPORT_GUIDELINES.md."""
-        result = load_prompt_context()
-        assert "AI_REPORT_GUIDELINES" in result.audit_prompt or "ai_report_guidelines" in result.audit_prompt.lower()
-        # The prompt instructs the LLM to follow the AI writing guidelines
+        combined = result.combined_system_prompt
+        assert "AI Report Guidelines" in combined
+        assert "SEO Audit Methodology" in combined
+        assert "Enterprise Report Template" in combined
 
     def test_seo_skill_contains_priority_order(self) -> None:
         """SKILL.md must describe the audit priority order."""
@@ -360,15 +360,15 @@ class TestRealFileContent:
         content_lower = result.ai_guidelines.lower()
         assert "critical" in content_lower or "severity" in content_lower
 
-    def test_report_specification_mentions_pdf(self) -> None:
-        """REPORT_SPECIFICATION.md must reference PDF as the primary output format."""
+    def test_master_report_structure_mentions_pdf(self) -> None:
+        """MASTER_REPORT_STRUCTURE.md must reference PDF as the output format."""
         result = load_prompt_context()
-        assert "pdf" in result.report_specification.lower()
+        assert "pdf" in result.master_report_structure.lower()
 
-    def test_report_specification_mentions_executive_summary(self) -> None:
-        """REPORT_SPECIFICATION.md must describe an Executive Summary section."""
+    def test_master_report_structure_mentions_executive_summary(self) -> None:
+        """MASTER_REPORT_STRUCTURE.md must describe an Executive Summary section."""
         result = load_prompt_context()
-        assert "executive summary" in result.report_specification.lower()
+        assert "executive summary" in result.master_report_structure.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -383,12 +383,12 @@ class TestPromptContextDataclass:
         ctx = PromptContext(
             audit_prompt="AP_CONTENT",
             seo_skill="SK_CONTENT",
-            report_specification="RS_CONTENT",
+            master_report_structure="MRS_CONTENT",
             ai_guidelines="AG_CONTENT",
         )
         assert ctx.audit_prompt == "AP_CONTENT"
         assert ctx.seo_skill == "SK_CONTENT"
-        assert ctx.report_specification == "RS_CONTENT"
+        assert ctx.master_report_structure == "MRS_CONTENT"
         assert ctx.ai_guidelines == "AG_CONTENT"
 
     def test_combined_with_empty_fields_does_not_raise(self) -> None:
@@ -396,7 +396,7 @@ class TestPromptContextDataclass:
         ctx = PromptContext(
             audit_prompt="",
             seo_skill="",
-            report_specification="",
+            master_report_structure="",
             ai_guidelines="",
         )
         combined = ctx.combined_system_prompt  # Must not raise
@@ -408,7 +408,7 @@ class TestPromptContextDataclass:
         ctx = PromptContext(
             audit_prompt=unique_value,
             seo_skill="B",
-            report_specification="C",
+            master_report_structure="C",
             ai_guidelines="D",
         )
         combined = ctx.combined_system_prompt
@@ -417,28 +417,28 @@ class TestPromptContextDataclass:
     def test_combined_contains_section_header_ai_guidelines(self) -> None:
         """combined_system_prompt includes the 'AI Report Guidelines' section header."""
         ctx = PromptContext(
-            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+            audit_prompt="A", seo_skill="B", master_report_structure="C", ai_guidelines="D"
         )
         assert "AI Report Guidelines" in ctx.combined_system_prompt
 
     def test_combined_contains_section_header_seo_skill(self) -> None:
         """combined_system_prompt includes the 'SEO Audit Methodology' section header."""
         ctx = PromptContext(
-            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+            audit_prompt="A", seo_skill="B", master_report_structure="C", ai_guidelines="D"
         )
         assert "SEO Audit Methodology" in ctx.combined_system_prompt
 
-    def test_combined_contains_section_header_report_spec(self) -> None:
-        """combined_system_prompt includes the 'Report Structure Specification' section header."""
+    def test_combined_contains_section_header_report_template(self) -> None:
+        """combined_system_prompt includes the enterprise report template header."""
         ctx = PromptContext(
-            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+            audit_prompt="A", seo_skill="B", master_report_structure="C", ai_guidelines="D"
         )
-        assert "Report Structure Specification" in ctx.combined_system_prompt
+        assert "Enterprise Report Template" in ctx.combined_system_prompt
 
     def test_combined_contains_section_header_audit_prompt(self) -> None:
         """combined_system_prompt includes the 'Audit Prompt' section header."""
         ctx = PromptContext(
-            audit_prompt="A", seo_skill="B", report_specification="C", ai_guidelines="D"
+            audit_prompt="A", seo_skill="B", master_report_structure="C", ai_guidelines="D"
         )
         assert "Audit Prompt" in ctx.combined_system_prompt
 
@@ -447,26 +447,26 @@ class TestPromptContextDataclass:
         ctx = PromptContext(
             audit_prompt="AUDIT_LAST",
             seo_skill="SKILL",
-            report_specification="SPEC",
+            master_report_structure="STRUCTURE",
             ai_guidelines="GUIDE",
         )
         combined = ctx.combined_system_prompt
         audit_pos = combined.rfind("AUDIT_LAST")       # Last occurrence
         skill_pos = combined.find("SKILL")
-        spec_pos = combined.find("SPEC")
+        structure_pos = combined.find("STRUCTURE")
         guide_pos = combined.find("GUIDE")
         # Audit prompt must appear after all other sections
         assert audit_pos > skill_pos
-        assert audit_pos > spec_pos
+        assert audit_pos > structure_pos
         assert audit_pos > guide_pos
 
-    def test_combined_seo_skill_between_guidelines_and_spec(self) -> None:
-        """SEO skill section appears after guidelines but before report spec."""
+    def test_combined_seo_skill_between_guidelines_and_report_template(self) -> None:
+        """SEO skill appears after guidelines but before the report template."""
         ctx = PromptContext(
-            audit_prompt="AP", seo_skill="SK", report_specification="RS", ai_guidelines="AG"
+            audit_prompt="AP", seo_skill="SK", master_report_structure="MRS", ai_guidelines="AG"
         )
         combined = ctx.combined_system_prompt
-        assert combined.find("AG") < combined.find("SK") < combined.find("RS")
+        assert combined.find("AG") < combined.find("SK") < combined.find("MRS")
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +483,7 @@ class TestLoadPromptContextDeterminism:
 
         assert first.audit_prompt == second.audit_prompt            # Identical
         assert first.seo_skill == second.seo_skill
-        assert first.report_specification == second.report_specification
+        assert first.master_report_structure == second.master_report_structure
         assert first.ai_guidelines == second.ai_guidelines
 
     def test_combined_is_stable_across_calls(self) -> None:

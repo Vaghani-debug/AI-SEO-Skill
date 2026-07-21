@@ -19,7 +19,7 @@ Files loaded
 ------------
 1. .github/prompts/seo_audit.prompt.md  — report prompt and output format
 2. .agents/skills/seo-audit-skill/SKILL.md — SEO audit methodology and checks
-3. docs/REPORT_SPECIFICATION.md         — official report structure
+3. .github/report_templates/MASTER_REPORT_STRUCTURE.md — official enterprise report template (single source of truth)
 4. docs/AI_REPORT_GUIDELINES.md         — tone, accuracy, and hallucination rules
 
 Public interface
@@ -50,8 +50,18 @@ _SEO_SKILL_PATH: tuple[str, ...] = (
 )
 # The installed SEO audit skill — audit methodology, checks, priority order
 
-_REPORT_SPEC_PATH: tuple[str, ...] = (
-    "docs", "REPORT_SPECIFICATION.md"
+# ---------------------------------------------------------------------------
+# NEW (2026-07-21)
+#
+# MASTER_REPORT_STRUCTURE.md is now the single source of truth for the
+# enterprise SEO report layout. The LLM must always use this template
+# instead of the legacy REPORT_SPECIFICATION.md.
+# ---------------------------------------------------------------------------
+
+_MASTER_REPORT_STRUCTURE_PATH: tuple[str, ...] = (
+    ".github",
+    "report_templates",
+    "MASTER_REPORT_STRUCTURE.md",
 )
 # The official report structure specification (sections, fields, formats)
 
@@ -80,8 +90,8 @@ class PromptContext:
     seo_skill: str
     # Content of SKILL.md — defines the SEO audit methodology and check framework
 
-    report_specification: str
-    # Content of REPORT_SPECIFICATION.md — defines the expected report sections
+    master_report_structure: str
+    # Content of MASTER_REPORT_STRUCTURE.md — defines the expected report sections
 
     ai_guidelines: str
     # Content of AI_REPORT_GUIDELINES.md — defines tone, accuracy, and writing rules
@@ -106,7 +116,7 @@ class PromptContext:
             "## SEO Audit Methodology (Skill)\n\n" + self.seo_skill,
 
             # Section 3: Report structure defines the expected output shape
-            "## Report Structure Specification\n\n" + self.report_specification,
+            "## Enterprise Report Template (Single Source of Truth)\n\n" + self.master_report_structure,
 
             # Section 4: The audit prompt defines the role, objective, and exact output format
             "## Audit Prompt\n\n" + self.audit_prompt,
@@ -154,22 +164,22 @@ def load_prompt_context(project_root: Path | None = None) -> PromptContext:
     # Load each file individually so the error message names the specific missing file
     audit_prompt: str = _load_file(project_root, _AUDIT_PROMPT_PATH)
     seo_skill: str = _load_file(project_root, _SEO_SKILL_PATH)
-    report_specification: str = _load_file(project_root, _REPORT_SPEC_PATH)
+    master_report_structure: str = _load_file(project_root, _MASTER_REPORT_STRUCTURE_PATH)
     ai_guidelines: str = _load_file(project_root, _AI_GUIDELINES_PATH)
 
     logger.info(
         "Prompt context loaded: audit_prompt=%d chars, seo_skill=%d chars, "
-        "report_spec=%d chars, ai_guidelines=%d chars",
+        "master_report_structure=%d chars, ai_guidelines=%d chars",
         len(audit_prompt),
         len(seo_skill),
-        len(report_specification),
+        len(master_report_structure),
         len(ai_guidelines),
     )
 
     return PromptContext(
         audit_prompt=audit_prompt,
         seo_skill=seo_skill,
-        report_specification=report_specification,
+        master_report_structure=master_report_structure,
         ai_guidelines=ai_guidelines,
     )
 
