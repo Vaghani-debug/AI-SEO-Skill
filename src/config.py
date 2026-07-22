@@ -39,6 +39,21 @@ class Settings(BaseSettings):
         description="Gemini model name to use for LLM report generation",
     )
 
+    # --- LLM / Perplexity -------------------------------------------------
+    perplexity_api_key: str = Field(
+        default="",  # Empty default so the app starts without crashing; a missing key is caught at report generation time
+        description="Perplexity API key loaded from PERPLEXITY_API_KEY in .env",
+    )
+    perplexity_model: str = Field(
+        default="sonar-pro",  # sonar-pro: advanced search model with grounding, best for comprehensive reports
+        description="Perplexity model name to use for LLM report generation",
+    )
+
+    llm_provider: str = Field(
+        default="gemini",  # Change to "perplexity" in .env to route all LLM calls to Perplexity
+        description="LLM provider to use: 'gemini' or 'perplexity'",
+    )
+
     # --- HTTP Fetch ----------------------------------------------------------
 
     fetch_timeout_seconds: int = Field(

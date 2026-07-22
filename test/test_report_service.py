@@ -41,6 +41,7 @@ def settings() -> Settings:
     s = Settings()
     s.gemini_api_key = "FAKE_API_KEY_FOR_TESTS"  # Non-empty so the key check passes
     s.gemini_model = "gemini-1.5-flash"           # Use the default model name
+    s.llm_provider = "gemini"                     # Pin to Gemini so tests never hit real Perplexity API
     return s
 
 
@@ -250,10 +251,28 @@ class TestGenerateReportSuccess:
         # Verify the API key is always passed before making a call
 
     async def test_retries_once_when_report_has_partial_required_parts(
-        self, settings: Settings, prompt_context: PromptContext
+        self, settings: Settings
     ) -> None:
         """A partial PART structure triggers exactly one retry and returns retry output."""
         evidence = _make_evidence()
+
+        # Template that declares 8 required parts — drives the dynamic heading extraction
+        template_with_all_parts = (
+            "# PART 1: FULL WEBSITE AUDIT\n"
+            "# PART 2: TECHNICAL SEO AUDIT\n"
+            "# PART 3: ON-PAGE SEO AUDIT\n"
+            "# PART 4: COMPLETE KEYWORD STRATEGY\n"
+            "# PART 5: COMPETITOR SEO ANALYSIS\n"
+            "# PART 6: OFF-PAGE SEO & AUTHORITY BUILDING\n"
+            "# PART 7: CONTENT STRATEGY & CONTENT GAP ANALYSIS\n"
+            "# PART 8: AI SEARCH & GENERATIVE ENGINE OPTIMIZATION (GEO)\n"
+        )
+        ctx = PromptContext(
+            audit_prompt="You are an SEO consultant. Audit {{website_url}}.",
+            seo_skill="Priority: Crawlability.",
+            master_report_structure=template_with_all_parts,
+            ai_guidelines="Never invent findings.",
+        )
 
         first_response = "# PART 1: FULL WEBSITE AUDIT\n\nOnly part 1 is present."
         second_response = (
@@ -282,7 +301,7 @@ class TestGenerateReportSuccess:
         with patch("src.services.report_service.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = mock_model
 
-            result = await generate_report("https://example.com", evidence, prompt_context, settings)
+            result = await generate_report("https://example.com", evidence, ctx, settings)
 
         assert mock_model.generate_content.call_count == 2
         assert result.markdown_report == second_response
@@ -298,7 +317,8 @@ class TestGenerateReportErrors:
     async def test_missing_api_key_raises_value_error(self, prompt_context: PromptContext) -> None:
         """ValueError is raised when GEMINI_API_KEY is not configured."""
         s = Settings()
-        s.gemini_api_key = ""  # Empty key — not configured
+        s.gemini_api_key = ""       # Empty key — not configured
+        s.llm_provider = "gemini"   # Ensure Gemini path is taken regardless of .env
         evidence = _make_evidence()
 
         with pytest.raises(ValueError, match="GEMINI_API_KEY"):

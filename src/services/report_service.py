@@ -31,12 +31,14 @@ Public interface
 import asyncio  # asyncio.to_thread runs the synchronous Gemini SDK call in a thread pool
 import logging  # Standard logging — records every LLM call attempt, success, and failure
 import os  # os.makedirs creates the reports/ output directory if it does not exist
+import re  # re.finditer extracts PART headings from the template at runtime
 import uuid  # uuid.uuid4 generates a unique ID for each audit
 from dataclasses import dataclass  # dataclass defines the structured result returned to the caller
 from datetime import datetime, timezone  # datetime.now(timezone.utc) for timezone-aware UTC timestamps
 from pathlib import Path  # Path handles OS-agnostic file paths for report storage
 
-import google.generativeai as genai  # Google Gemini SDK — the LLM used for report generation
+import google.generativeai as genai  # Google Gemini SDK — used when llm_provider=gemini
+from openai import AsyncOpenAI  # OpenAI-compatible client — used when llm_provider=perplexity
 
 from src.config import Settings  # Settings provides the API key and model configuration
 from src.services.extractor_service import (
@@ -49,18 +51,18 @@ from src.services.prompt_loader import PromptContext  # Loaded guidance files co
 # Module-level logger
 logger = logging.getLogger(__name__)  # Resolves to "src.services.report_service"
 
-# Minimum structure guardrails for the final markdown output.
-# We log missing parts for observability but do not fail the audit request.
-_REQUIRED_REPORT_PART_HEADINGS: tuple[str, ...] = (
-    "# PART 1:",
-    "# PART 2:",
-    "# PART 3:",
-    "# PART 4:",
-    "# PART 5:",
-    "# PART 6:",
-    "# PART 7:",
-    "# PART 8:",
-)
+def _extract_required_part_headings(master_report_structure: str) -> tuple[str, ...]:
+    """
+    Derive required PART headings from the live template content.
+
+    Reads the headings that are actually present in MASTER_REPORT_STRUCTURE.md
+    so the validator always reflects the current template, regardless of how
+    many parts the file contains.
+    """
+    return tuple(
+        m.group(0)
+        for m in re.finditer(r"^# PART \d+:", master_report_structure, re.MULTILINE)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +129,13 @@ async def generate_report(
 
     # --- Step 1: Validate API key -------------------------------------------
 
-    if not settings.gemini_api_key:
+    if settings.llm_provider == "perplexity":
+        if not settings.perplexity_api_key:
+            raise ValueError(
+                "PERPLEXITY_API_KEY is not configured. "
+                "Add it to the .env file: PERPLEXITY_API_KEY=your_key_here"
+            )
+    elif not settings.gemini_api_key:
         # Fail fast with a clear message rather than crashing inside the Gemini SDK
         raise ValueError(
             "GEMINI_API_KEY is not configured. "
@@ -176,17 +184,30 @@ async def generate_report(
         len(user_message),
     )
 
-    # --- Step 5: Call Gemini ------------------------------------------------
+    # --- Step 5: Call the configured LLM provider --------------------------
 
-    markdown_report: str = await _call_gemini(
-        system_prompt=system_prompt,
-        user_message=user_message,
-        settings=settings,
+    if settings.llm_provider == "perplexity":
+        markdown_report: str = await _call_perplexity(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            settings=settings,
+        )
+    else:
+        markdown_report: str = await _call_gemini(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            settings=settings,
+        )
+
+    # Derive required headings from the template that was actually used for this run.
+    # This reflects any parts the user has added or removed from MASTER_REPORT_STRUCTURE.md.
+    required_headings: tuple[str, ...] = _extract_required_part_headings(
+        prompt_context.master_report_structure
     )
 
     # Log structural drift if the model omits required report parts.
     # This keeps the request successful while making inconsistency observable.
-    missing_parts: list[str] = _missing_required_report_parts(markdown_report)
+    missing_parts: list[str] = _missing_required_report_parts(markdown_report, required_headings)
     if missing_parts:
         logger.warning(
             "Generated report for %s is missing required sections: %s",
@@ -196,15 +217,22 @@ async def generate_report(
 
         # One retry only when the model produced a partially structured report.
         # If all required headings are missing, a retry often repeats the same failure.
-        if len(missing_parts) < len(_REQUIRED_REPORT_PART_HEADINGS):
+        if len(missing_parts) < len(required_headings):
             retry_user_message: str = _build_retry_user_message(user_message, missing_parts)
-            markdown_report = await _call_gemini(
-                system_prompt=system_prompt,
-                user_message=retry_user_message,
-                settings=settings,
-            )
+            if settings.llm_provider == "perplexity":
+                markdown_report = await _call_perplexity(
+                    system_prompt=system_prompt,
+                    user_message=retry_user_message,
+                    settings=settings,
+                )
+            else:
+                markdown_report = await _call_gemini(
+                    system_prompt=system_prompt,
+                    user_message=retry_user_message,
+                    settings=settings,
+                )
 
-            missing_parts = _missing_required_report_parts(markdown_report)
+            missing_parts = _missing_required_report_parts(markdown_report, required_headings)
             if missing_parts:
                 logger.warning(
                     "Retry report for %s is still missing required sections: %s",
@@ -243,7 +271,7 @@ async def generate_report(
 
 
 # ---------------------------------------------------------------------------
-# LLM call helper
+# LLM call helpers
 # ---------------------------------------------------------------------------
 
 async def _call_gemini(
@@ -252,19 +280,18 @@ async def _call_gemini(
     settings: Settings,
 ) -> str:
     """
-    Configure and call the Gemini API asynchronously.
+    Call the Gemini API asynchronously.
 
-    The Gemini SDK's generate_content() is synchronous.  We run it in a
-    thread-pool executor via asyncio.to_thread() so it does not block the
-    FastAPI event loop while waiting for the LLM response.
+    The Gemini SDK is synchronous; asyncio.to_thread() keeps the FastAPI
+    event loop unblocked while waiting for the response.
 
     Args:
-        system_prompt: Combined guidance context sent as the system instruction.
-        user_message: Formatted audit evidence sent as the user turn.
+        system_prompt: Combined guidance context as the system instruction.
+        user_message: Formatted audit evidence as the user turn.
         settings: Provides GEMINI_API_KEY and GEMINI_MODEL.
 
     Returns:
-        The Markdown text content from the LLM response.
+        Markdown report text from the LLM.
 
     Raises:
         RuntimeError: If the LLM returns an empty or blocked response.
@@ -276,28 +303,19 @@ async def _call_gemini(
     # so tests can mock genai before any configuration takes place
 
     model = genai.GenerativeModel(
-        model_name=settings.gemini_model,          # "gemini-1.5-flash" by default
-        system_instruction=system_prompt,           # All four guidance files as the system context
+        model_name=settings.gemini_model,
+        system_instruction=system_prompt,
     )
-    # GenerativeModel holds the system instruction — it is not part of the conversation history
 
     try:
-        # Run the synchronous SDK call in a thread pool to avoid blocking the event loop
-        response = await asyncio.to_thread(
-            model.generate_content,   # The synchronous SDK function to call
-            user_message,              # The formatted evidence as the user turn
-        )
-        # asyncio.to_thread wraps a synchronous function as an awaitable coroutine
-
+        response = await asyncio.to_thread(model.generate_content, user_message)
     except Exception as llm_error:
-        # Catch any SDK-level exception (network error, quota exceeded, invalid key, etc.)
         logger.error("Gemini API call failed: %s", llm_error)
         raise RuntimeError(
             f"LLM report generation failed: {llm_error}. "
             "Check GEMINI_API_KEY in .env and verify the API is reachable."
         ) from llm_error
 
-    # Validate the response contains usable text
     if not response or not response.text:
         logger.error("Gemini returned an empty or blocked response")
         raise RuntimeError(
@@ -307,8 +325,60 @@ async def _call_gemini(
         )
 
     logger.info("Gemini response received: %d characters", len(response.text))
+    return response.text
 
-    return response.text  # The Markdown report text
+
+async def _call_perplexity(
+    system_prompt: str,
+    user_message: str,
+    settings: Settings,
+) -> str:
+    """
+    Call the Perplexity API asynchronously using the OpenAI-compatible client.
+
+    Args:
+        system_prompt: Combined guidance context as the system instruction.
+        user_message: Formatted audit evidence as the user turn.
+        settings: Provides PERPLEXITY_API_KEY and PERPLEXITY_MODEL.
+
+    Returns:
+        Markdown report text from the LLM.
+
+    Raises:
+        RuntimeError: If the LLM returns an empty or missing response.
+    """
+    logger.info("Calling Perplexity model: %s", settings.perplexity_model)
+
+    client = AsyncOpenAI(
+        api_key=settings.perplexity_api_key,
+        base_url="https://api.perplexity.ai",
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model=settings.perplexity_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+        )
+    except Exception as llm_error:
+        logger.error("Perplexity API call failed: %s", llm_error)
+        raise RuntimeError(
+            f"LLM report generation failed: {llm_error}. "
+            "Check PERPLEXITY_API_KEY in .env and verify the API is reachable."
+        ) from llm_error
+
+    if not response or not response.choices or not response.choices[0].message.content:
+        logger.error("Perplexity returned an empty or missing response")
+        raise RuntimeError(
+            "The LLM returned an empty response. "
+            "Check your PERPLEXITY_API_KEY and model name in .env."
+        )
+
+    text: str = response.choices[0].message.content
+    logger.info("Perplexity response received: %d characters", len(text))
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -522,15 +592,22 @@ def _build_user_message(
     )
 
 
-def _missing_required_report_parts(markdown_report: str) -> list[str]:
+def _missing_required_report_parts(
+    markdown_report: str,
+    required_headings: tuple[str, ...],
+) -> list[str]:
     """
     Return required PART headings that are missing from the generated report.
+
+    Args:
+        markdown_report: The LLM-generated Markdown text to validate.
+        required_headings: PART headings extracted from the active template.
 
     This is a lightweight validation helper for observability only.
     """
     return [
         heading
-        for heading in _REQUIRED_REPORT_PART_HEADINGS
+        for heading in required_headings
         if heading not in markdown_report
     ]
 
