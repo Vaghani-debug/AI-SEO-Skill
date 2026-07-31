@@ -6,3 +6,6 @@ __pycache__/
 test/last_fetch.html
 test/last_fetch.json
 test/last_result_*.md
+node_modules/
+dist/
+.playwright-cli/
