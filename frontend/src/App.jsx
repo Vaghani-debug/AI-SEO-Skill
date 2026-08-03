@@ -1,20 +1,30 @@
 import { useState } from "react";
 import { AuditForm } from "./components/AuditForm.jsx";
+import { AuditReport } from "./components/AuditReport.jsx";
 import { SubmittedUrl } from "./components/SubmittedUrl.jsx";
 import { submitAuditRequest } from "./services/auditService.js";
 
 export default function App() {
   const [submittedUrl, setSubmittedUrl] = useState("");
+  const [reportMarkdown, setReportMarkdown] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   async function handleAuditSubmit(url) {
     setIsLoading(true);
     setSubmittedUrl("");
+    setReportMarkdown("");
+    setErrorMessage("");
 
-    const result = await submitAuditRequest(url);
-
-    setSubmittedUrl(result.url);
-    setIsLoading(false);
+    try {
+      const result = await submitAuditRequest(url);
+      setSubmittedUrl(result.url);
+      setReportMarkdown(result.report_markdown);
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -30,7 +40,14 @@ export default function App() {
 
         <AuditForm onSubmit={handleAuditSubmit} isLoading={isLoading} />
 
+        {errorMessage ? (
+          <p className="status-message status-message-error" role="alert">
+            {errorMessage}
+          </p>
+        ) : null}
+
         <SubmittedUrl url={submittedUrl} />
+        <AuditReport markdown={reportMarkdown} />
       </section>
     </main>
   );

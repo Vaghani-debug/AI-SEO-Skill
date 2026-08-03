@@ -31,7 +31,7 @@ input {
 }
 
 .audit-panel {
-  width: min(100%, 720px);
+  width: min(100%, 920px);
   padding: 40px;
   border: 1px solid #dfe5ee;
   border-radius: 8px;
@@ -136,6 +136,20 @@ input {
   line-height: 1.4;
 }
 
+.status-message {
+  margin: 18px 0 0;
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.status-message-error {
+  border: 1px solid #f3b6ad;
+  color: #8a1f14;
+  background: #fff4f2;
+}
+
 .submitted-url {
   display: grid;
   gap: 6px;
@@ -156,6 +170,81 @@ input {
   color: #172033;
   font-size: 1rem;
   line-height: 1.5;
+}
+
+.audit-report {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid #e4e9f1;
+}
+
+.audit-report h2 {
+  margin: 0 0 16px;
+  color: #172033;
+  font-size: 1.35rem;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.markdown-report {
+  color: #263244;
+  line-height: 1.65;
+}
+
+.markdown-report h1,
+.markdown-report h2,
+.markdown-report h3 {
+  margin: 28px 0 12px;
+  color: #172033;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.markdown-report h1 {
+  font-size: 1.6rem;
+}
+
+.markdown-report h2 {
+  font-size: 1.32rem;
+}
+
+.markdown-report h3 {
+  font-size: 1.12rem;
+}
+
+.markdown-report p,
+.markdown-report ul,
+.markdown-report ol {
+  margin: 0 0 14px;
+}
+
+.markdown-report table {
+  display: block;
+  width: 100%;
+  margin: 18px 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-report th,
+.markdown-report td {
+  border: 1px solid #dfe5ee;
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-report th {
+  background: #f3f6fa;
+  color: #172033;
+  font-weight: 750;
+}
+
+.markdown-report code {
+  border-radius: 4px;
+  padding: 2px 5px;
+  background: #eef2f7;
+  font-size: 0.92em;
 }
 
 @media (max-width: 640px) {
