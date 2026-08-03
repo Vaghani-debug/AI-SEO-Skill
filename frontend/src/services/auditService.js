@@ -11,7 +11,7 @@ export async function submitAuditRequest(url) {
     });
   } catch (error) {
     throw new Error(
-      "The backend API is not reachable. Please make sure FastAPI is running on port 8000."
+      "The API is not reachable. Please make sure the FastAPI app is running."
     );
   }
 

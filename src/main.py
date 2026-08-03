@@ -1,25 +1,21 @@
 import asyncio
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
 from .models import AuditRequest, AuditResponse
-from .openai_audit import AuditGenerationError, generate_audit_report
+from .llm_audit import AuditGenerationError, generate_audit_report
 from .prompt_loader import load_audit_prompt
 
 
 app = FastAPI(title="AI SEO Agent API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-    allow_credentials=False,
-    allow_methods=["POST"],
-    allow_headers=["*"],
-)
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_FRONTEND_DIST_DIR = _PROJECT_ROOT / "frontend" / "dist"
 
 
 @app.get("/health")
@@ -49,3 +45,7 @@ async def create_audit(request: AuditRequest) -> AuditResponse:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return AuditResponse(url=url, report_markdown=report_markdown)
+
+
+# Serve the built frontend from the same FastAPI process so the app uses one URL.
+app.mount("/", StaticFiles(directory=_FRONTEND_DIST_DIR, html=True), name="frontend")

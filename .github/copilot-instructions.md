@@ -3,13 +3,9 @@
 ## Project Identity
 
 Project Name: AI SEO Agent
-
 This repository contains the implementation of an AI-powered SEO auditing platform.
-
 The project is currently in the Minimum Viable Product (MVP) phase.
-
 The MVP focuses on delivering one high-quality SEO audit using a single AI agent.
-
 The objective is to build a production-ready platform rather than a proof of concept.
 
 ---
@@ -22,7 +18,6 @@ The system should:
 
 - Audit websites
 - Detect SEO issues
-- Calculate an SEO score
 - Prioritize findings
 - Generate AI recommendations
 - Produce a professional PDF report
@@ -34,7 +29,7 @@ Always optimize for business value rather than feature count.
 
 # Product Philosophy
 
-The platform should behave as an experienced SEO consultant rather than simply an SEO scanner.
+The platform should behave as an experienced SEO consultant with more than 15 years of extensive experience rather than simply an SEO scanner.
 
 Every recommendation should explain:
 
@@ -46,24 +41,6 @@ Every recommendation should explain:
 - Estimated implementation effort
 
 The AI should educate users rather than simply list issues.
-
----
-
-# Current Project Phase
-
-Current Phase:
-
-Minimum Viable Product (MVP)
-
-During the MVP phase:
-
-- Prefer simplicity.
-- Avoid unnecessary complexity.
-- Deliver working software quickly.
-- Build only core functionality.
-- Avoid premature optimization.
-
-Do not introduce enterprise features unless explicitly requested.
 
 ---
 
@@ -84,38 +61,13 @@ Future versions may evolve toward a hybrid architecture.
 
 # Technology Stack
 
-Primary language:
-
-Python
-
-Framework:
-
-FastAPI
-
-Website crawling:
-
-Playwright
-
-AI:
-
-LLM
-
-Report generation:
-
-PDF
-
-Development environment:
-
-Visual Studio Code
-
-Version control:
-
-Git
-
-Operating System:
-
-Windows
-
+Primary language: Python
+Framework: FastAPI
+AI: LLM
+Report generation: PDF
+Development environment: Visual Studio Code
+Version control: Git
+Operating System: Windows
 Always generate solutions compatible with this stack unless instructed otherwise.
 
 ---
@@ -205,33 +157,13 @@ Use environment variables for configuration.
 
 ---
 
-# SEO Philosophy
-
-Follow the rules defined in:
-
-docs/SEO_RULES.md
-
-Do not invent SEO rules.
-
-Recommendations must be based on measurable evidence.
-
-If sufficient evidence is unavailable, clearly state the limitation instead of guessing.
-
----
-
 # AI Behaviour
-
-Follow:
-
-docs/AI_REPORT_GUIDELINES.md
 
 The AI should behave as:
 
 Senior Technical SEO Consultant
-
 The AI should never hallucinate technical findings.
-
-Always explain recommendations in plain business language.
+Always explain recommendations in plain business and technical language.
 
 ---
 
@@ -252,76 +184,17 @@ Do not change report structure without explicit approval.
 
 ---
 
-# Scoring
-
-Follow:
-
-docs/SCORING_ENGINE.md
-
-Never invent scoring logic.
-
-Do not change scoring weights without updating the scoring specification.
-
----
-
-# Documentation
-
-Before implementing major features:
-
-Review:
-
-- docs/PRODUCT.md
-- docs/ARCHITECTURE.md
-- docs/SEO_RULES.md
-
-Keep documentation synchronized with implementation.
-
----
-
-# Development Workflow
-
-When implementing new functionality:
-
-1. Understand the requirement.
-2. Review the relevant documentation.
-3. Propose the simplest implementation.
-4. Explain architectural trade-offs.
-5. Implement production-quality code.
-6. Suggest improvements separately.
-7. Never mix MVP features with future roadmap items.
-
----
 
 # Code Generation Rules
 
 Prefer modifying existing files over creating unnecessary new files.
-
 Keep folder structure organized.
-
 Avoid duplicate logic.
-
 Extract reusable functionality.
-
 Use configuration instead of hardcoded values.
 
 ---
 
-# Testing
-
-Generate:
-
-- Unit tests
-- Integration tests
-
-Tests should cover:
-
-- Success cases
-- Failure cases
-- Edge cases
-
-Avoid untested code.
-
----
 
 # Performance
 
@@ -361,39 +234,6 @@ When answering development questions:
 - Distinguish MVP from future improvements.
 
 Avoid unnecessary complexity.
-
----
-
-# Repository Context
-
-This repository follows a documentation-first approach.
-
-The following documents define project requirements:
-
-- docs/PRODUCT.md
-- docs/ARCHITECTURE.md
-- docs/SEO_RULES.md
-- docs/REPORT_SPECIFICATION.md
-- docs/SCORING_ENGINE.md
-- docs/AI_REPORT_GUIDELINES.md
-
-Follow all applicable instruction files under:
-
-.github/instructions/
-
-including:
-
-- python.instructions.md
-- playwright.instructions.md
-- fastapi.instructions.md
-- seo.instructions.md
-- git.instructions.md
-
-Repository-wide instructions and applicable path-specific instructions must both be followed.
-
-Treat these documents as the source of truth.
-
-If implementation conflicts with documentation, ask for clarification before changing behavior.
 
 ---
 

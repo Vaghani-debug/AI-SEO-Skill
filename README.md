@@ -2,6 +2,26 @@
 
 AI-SEO-Agent is a workspace for building repeatable, agent-assisted SEO audit workflows.
 
+## Runtime Model
+
+This branch now uses a monolithic FastAPI web app:
+
+- FastAPI serves the API endpoints.
+- FastAPI also serves the built frontend static files.
+- You run one server and use one URL.
+
+## API Keys
+
+Configure API keys in your local [.env](.env) file (already ignored by git):
+
+```env
+GEMINI_API_KEY=your_gemini_key
+OPENAI_API_KEY=your_openai_key
+PERPLEXITY_API_KEY=your_perplexity_key
+```
+
+A template is available at [.env.example](.env.example).
+
 ## Structure
 
 - `.github/copilot-instructions.md`: Project-wide Copilot guidance.
@@ -11,6 +31,22 @@ AI-SEO-Agent is a workspace for building repeatable, agent-assisted SEO audit wo
 - `skills/agentic-seo/`: Placeholder directory for a future agentic SEO skill.
 - `test/`: Current experimental fetch, analysis, and captured result files.
 
-## Getting Started
+## Getting Started (One URL)
 
-Use the scripts under `test/` as the current entry point for experimenting with fetch and analysis workflows. Keep new audit behavior documented in `docs/SEO_RULES.md` and validated with deterministic fixtures where possible.
+1. Build frontend assets once (or after frontend changes):
+
+   ```powershell
+   cd frontend
+   npm ci
+   npm run build
+   ```
+
+2. Run the FastAPI app from repository root:
+
+   ```powershell
+   python -m uvicorn src.main:app --reload --port 8000
+   ```
+
+3. Open:
+
+   - `http://127.0.0.1:8000`
