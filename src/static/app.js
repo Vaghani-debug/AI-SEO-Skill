@@ -21,9 +21,8 @@
 // Module-level state
 // ---------------------------------------------------------------------------
 
-let currentAuditId = null;
-// currentAuditId stores the audit identifier returned by the API so the
-// PDF download function knows which report to request
+let currentPdfUrl = null;
+// currentPdfUrl stores the pdf_download_url from the API response
 
 // ---------------------------------------------------------------------------
 // DOM element references
@@ -135,8 +134,7 @@ async function handleAudit() {
     // Parse the JSON body of the 202 Accepted response
     // This should match the AuditResult model in src/api/models.py
 
-    currentAuditId = data.audit_id;
-    // Store the audit ID so downloadPdf() can construct the PDF endpoint URL
+    currentPdfUrl = data.pdf_download_url || "";
 
     renderReport(data);
     // Render the Markdown report and show the report section
@@ -204,19 +202,12 @@ function renderReport(data) {
 // file download dialog.
 
 function downloadPdf() {
-  if (!currentAuditId) {
-    // Guard: button should not be clickable without an audit ID, but check anyway
-    showError("No audit available for download. Please run an audit first.");
+  if (!currentPdfUrl) {
+    showError("No PDF available. Please run an audit first.");
     return;
   }
 
-  const pdfUrl = `/api/v1/audits/${currentAuditId}/pdf`;
-  // Construct the PDF endpoint URL using the stored audit ID
-  // This maps to GET /api/v1/audits/{audit_id}/pdf in src/api/routes/audit.py
-
-  window.open(pdfUrl, "_blank");
-  // Open the PDF URL in a new browser tab
-  // The FastAPI FileResponse will set Content-Disposition: attachment which triggers the download dialog
+  window.open(currentPdfUrl, "_blank");
 }
 
 
@@ -254,10 +245,10 @@ function resetSections() {
   hideSection(errorSection);   // Hide error card
   hideSection(reportSection);  // Hide report card
 
-  errorMessage.textContent = "";   // Clear previous error text
-  reportMeta.innerHTML = "";       // Clear previous audit URL / timestamp
-  reportBody.innerHTML = "";       // Clear previous report HTML
-  currentAuditId = null;           // Reset the stored audit ID
+  errorMessage.textContent = "";
+  reportMeta.innerHTML = "";
+  reportBody.innerHTML = "";
+  currentPdfUrl = null;
 }
 
 function resetUI() {
