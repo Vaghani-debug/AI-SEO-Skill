@@ -51,11 +51,29 @@ If specific data (such as per-page title or description) is unavailable because 
 homepage was fetched:
 
 - Do NOT write "Not Detected" — this phrase is forbidden in the report.
+- Do NOT write "Could not be verified in this audit." in SEO Notes or recommendation columns — see the SEO Notes Column section.
 - Derive the Page Name from the URL slug (e.g. /services/hair-transplant/ → Hair Transplant).
 - Use the sitemap <loc> URLs for the URL column in all page inventory tables.
 - For the homepage row, use the verified title, description, H1, and links from the evidence.
-- For all other rows, provide targeted SEO recommendations based on the URL structure and page type.
-- Briefly acknowledge that a full per-page metadata audit requires fetching each URL individually.
+- For all rows' SEO Notes: always write three URL-specific improvement bullets separated by <br> regardless of whether the page was fetched individually.
+- Audit coverage limits belong in narrative sections only, never in table cells.
+
+---
+
+# Originality & Source Integrity
+
+Every report must be written fresh for the specific website being audited.
+
+Never reuse, echo, or imitate content, phrasing, or artifacts from any other tool, chat session, or prior report.
+
+Absolutely forbidden anywhere in the output:
+
+- Any mention of Perplexity, Comet browser, ChatGPT, Google Docs, "convert to Google Docs", "copy this into", or any AI-tool branding or workflow instructions.
+- Chat-transcript fragments, greetings, meta-commentary about the audit process, or references to "the attached PDF" or prior conversations.
+- Content describing a different website, business, or industry than the one being audited.
+- Duplicated sections or repeated boilerplate paragraphs.
+
+If in doubt about whether a sentence belongs, remove it rather than risk contamination.
 
 ---
 
@@ -157,6 +175,69 @@ Never write "Not Detected" in any table cell.
 
 Populate page inventory tables using the sitemap <loc> URLs provided in the evidence.
 Derive the Page Name from the URL slug for every row beyond the homepage.
+Place main navigation pages (home, about, main service categories, contact, FAQ, blog index) in the Core Pages table.
+Place all remaining pages (service sub-pages, location pages, blog posts, policy/utility pages) in the Subpages table.
+
+---
+
+# SEO Notes Column
+
+Every SEO Notes cell MUST always contain real SEO analysis — never a data-availability statement.
+
+MANDATORY: Markdown table cells must not contain raw newlines or Markdown bullet syntax.
+Use <br> between items so the cell stays on one row.
+
+Write exactly three short improvement bullets specific to that page's URL and content type.
+Do NOT include label headings like "SEO Strategy:" or "Action Items:" — just the improvement itself:
+
+[specific keyword or content improvement for this URL]<br>[technical or structural SEO improvement]<br>[link-building or conversion improvement]
+
+Example for /hair-transplant-in-bangalore:
+Target "hair transplant Bangalore" and nearby-area keyword variants<br>Add FAQ schema for common pre-treatment questions<br>Build internal links from the homepage and /services to this page
+
+The phrase "Could not be verified in this audit." must NEVER appear in any table cell.
+
+---
+
+# External Research Citation Rules (Keyword & Competitor Sections)
+
+PART 5 (Keyword Opportunity Strategy) and PART 6 (Competitor Analysis) rely on external market knowledge rather than crawl evidence. Every row that states a number, ranking, or competitive claim (search volume, authority estimate, ranking position, competitor traffic) must follow these rules:
+
+- Every such claim is an estimate, never a measured fact. Label it as an estimate in the surrounding text or table cell (e.g. "Est. Monthly Searches").
+- The `Source` column must name where the estimate is grounded (e.g. "Industry knowledge", "Public competitor site content", "Search engine results analysis"). Never leave it blank.
+- The `Retrieved` column must contain the audit date supplied in the evidence/context. Never fabricate a different date.
+- Never state a specific numeric search volume, ranking position, or backlink count as a precise fact — always express it as a range or approximate estimate.
+- List 3-5 competitors maximum in PART 6, chosen only from businesses plausibly competing in the same market/industry as the audited site. Do not invent competitor names if none can be reasonably inferred — state that competitor identification requires additional research instead.
+- Do not fabricate competitor URLs. Only reference a competitor website if it is a real, plausible domain for that industry.
+
+---
+
+# Conditional Section Rules (PART 7: Location & Market Expansion)
+
+PART 7 must contain either 7.2 or 7.3, never both filled in, and never both empty:
+
+- If the business evidence indicates a local or service-area business (physical location, city/region references, "near me" style services), complete section 7.2 (Local Location Opportunities) with a bounded table of realistic nearby cities/regions, and write "Not applicable — business is not location-based." under 7.3.
+- If the business is not location-based (e-commerce, SaaS, national/global content site), complete section 7.3 (Audience & Market Expansion Opportunities) with realistic audience segments or market verticals, and write "Not applicable — business does not target specific locations." under 7.2.
+- Always complete 7.1 (Applicability Assessment) first, explaining which path was chosen and why, based on evidence from the crawl (address/NAP data, service-area language, business type).
+- Never generate more than 8 rows in the Location Opportunity Table. Quality and relevance over quantity.
+
+---
+
+# Structured Data, Off-Page & Execution Sections (PARTS 8-10)
+
+- PART 8: Recommend only schema types genuinely applicable to the business type observed in the evidence (e.g. LocalBusiness, Product, Article, FAQPage, Organization). Do not recommend schema unrelated to the site's content.
+- PART 9: Off-page and GEO recommendations must be general best-practice guidance grounded in the site's actual content and industry — never fabricated backlink counts or named link sources that were not verified.
+- PART 10: The 30/60/90-day plan and KPI dashboard must reference issues and recommendations already established earlier in the report. Do not introduce new findings here.
+
+---
+
+# Methodology, Limitations & Sources (PART 11)
+
+PART 11 must:
+
+- Describe the audit methodology in plain language: sampled crawl coverage, deterministic technical checks, and cited external research.
+- State data limitations honestly, including that only a sample of subpages was analyzed and that keyword/competitor figures are estimates, not measured data.
+- Populate the Source Register table with one row per external claim used in PARTS 5-9, citing the same Source/Retrieved values used in those sections. Do not leave the table empty if any external claims were made elsewhere in the report; do not fabricate rows if no external claims were made.
 
 ---
 
@@ -231,6 +312,18 @@ Before returning the report, verify that:
 ✓ Markdown formatting remains valid.
 
 ✓ The phrase "Not Detected" does not appear anywhere in the report.
+
+✓ The phrase "Could not be verified in this audit." does not appear in any table cell.
+
+✓ Every SEO Notes cell contains three URL-specific improvement bullets separated by <br> with no bold label headings.
+
+✓ Every numeric claim in PARTS 5, 6, and 7 has a non-empty Source and Retrieved value and is phrased as an estimate.
+
+✓ PART 7 contains exactly one completed subsection (7.2 or 7.3), with the other marked not applicable.
+
+✓ No mention of Perplexity, Comet browser, ChatGPT, Google Docs, or any AI-tool branding, chat transcript text, or references to prior conversations/attachments appears anywhere.
+
+✓ PART 11's Source Register lists every external claim made in PARTS 5-9, with no fabricated rows.
 
 ---
 
