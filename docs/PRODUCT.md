@@ -138,6 +138,14 @@ This ensures reliability and builds user trust.
 - Executive summary
 - Interactive AI chat based on the audit report
 
+#### Market & Competitive Research _(Cited, Bounded)_
+
+- Keyword opportunity strategy: primary and long-tail keyword suggestions, each labeled as an estimate with a source and retrieval date.
+- Competitor analysis: 3-5 automatically identified organic competitors with a high-level overview and competitive gaps.
+- Conditional location or market-expansion strategy: a bounded local-city opportunity table for location-based businesses, or an audience/market-expansion section for non-local businesses — never both.
+- Structured data and off-page/GEO recommendations grounded in the site's actual content and industry.
+- Every externally researched claim must carry a source and retrieval date; no live rank tracking, backlink monitoring, or historical trend data is produced.
+
 #### Reporting
 
 - Professional SEO audit report
@@ -156,11 +164,13 @@ The following features are intentionally excluded from the MVP:
 - Team collaboration
 - White-label reports
 - API access
-- Advanced competitor analysis
-- Advanced keyword tracking
+- Live keyword rank tracking or historical keyword trend monitoring
+- Live competitor backlink monitoring or ongoing competitor tracking
 - Scheduled recurring audits
 - Historical audit comparisons
 - Third-party integrations
+
+> Bounded, cited keyword and competitor research (see Market & Competitive Research above) is in scope for the MVP. Only continuous/live tracking and historical comparison features remain excluded.
 
 > These capabilities may be considered in future releases after validating the core product.
 

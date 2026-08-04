@@ -66,6 +66,53 @@ class Settings(BaseSettings):
         description="Maximum number of HTTP redirects to follow when fetching a URL",
     )
 
+    # --- Sitemap Inventory / Crawl Sampling -----------------------------------
+
+    sitemap_inventory_limit: int = Field(
+        default=500,  # Total distinct page URLs recorded in the site inventory, across all sitemaps
+        description="Maximum number of URLs to record when building the full sitemap inventory",
+    )
+
+    sitemap_index_max_depth: int = Field(
+        default=3,  # A sitemap index pointing to sitemaps that point to more indexes, three levels deep
+        description="Maximum recursion depth when resolving nested sitemap index files",
+    )
+
+    crawl_sample_limit: int = Field(
+        default=30,  # Deliberately smaller than sitemap_inventory_limit — only a representative sample is crawled
+        description="Maximum number of pages selected from the inventory for the deterministic crawl sample",
+    )
+
+    crawl_core_page_limit: int = Field(
+        default=10,  # Core/navigation pages are prioritized but still bounded so one site can't consume the whole sample
+        description="Maximum number of core/navigation pages included in the crawl sample",
+    )
+
+    crawl_sample_per_type_limit: int = Field(
+        default=5,  # Five representative pages per non-core page type (service/product, blog, location, category, utility)
+        description="Maximum number of pages sampled per non-core page type in the crawl sample",
+    )
+
+    crawl_concurrency: int = Field(
+        default=5,  # Bounded concurrency so the audited site is not overloaded with simultaneous requests
+        description="Maximum number of sampled pages crawled concurrently",
+    )
+
+    crawl_max_page_bytes: int = Field(
+        default=2_000_000,  # ~2 MB; large enough for real pages, small enough to protect memory/LLM context
+        description="Maximum response size in bytes accepted when crawling a sampled page",
+    )
+
+    crawl_js_shell_word_threshold: int = Field(
+        default=50,  # Pages with fewer visible words than this are treated as JS shells needing rendering
+        description="Minimum visible word count before an httpx-fetched page is considered a JS shell",
+    )
+
+    playwright_navigation_timeout_ms: int = Field(
+        default=30_000,  # 30 seconds, per project Playwright navigation timeout convention
+        description="Navigation timeout in milliseconds for the Playwright rendering fallback",
+    )
+
     # --- Report Storage ------------------------------------------------------
 
     reports_dir: str = Field(

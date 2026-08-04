@@ -12,11 +12,13 @@ Run with:
 
 import pytest  # pytest: test runner
 
+from src.services.audit_models import PageType
 from src.services.extractor_service import (
     AuditEvidence,
     ImageInfo,
     RobotsTxtEvidence,
     SitemapEvidence,
+    build_page_evidence,
     extract,
 )
 from src.services.fetch_service import FetchedResource, SiteFetchResult
@@ -449,3 +451,162 @@ class TestUnverifiableFields:
         """Schema / structured data is listed as unverifiable."""
         result = extract(_make_site())
         assert any("schema" in f.lower() or "structured data" in f.lower() for f in result.unverifiable_fields)
+
+
+# ---------------------------------------------------------------------------
+# build_page_evidence() — multi-page crawl extraction
+# ---------------------------------------------------------------------------
+
+def _make_page_resource(
+    content: str = "<html><head></head><body></body></html>",
+    status_code: int = 200,
+    url: str = "https://example.com/about",
+    is_success: bool = True,
+    used_playwright_fallback: bool = False,
+    redirect_chain: list[str] | None = None,
+) -> FetchedResource:
+    return FetchedResource(
+        url=url,
+        label="sampled_page",
+        final_url=url,
+        status_code=status_code,
+        content=content,
+        is_success=is_success,
+        is_fetched=True,
+        used_playwright_fallback=used_playwright_fallback,
+        redirect_chain=redirect_chain or [],
+    )
+
+
+class TestBuildPageEvidence:
+
+    def test_populates_core_fields(self) -> None:
+        html = (
+            "<html lang='en'><head><title>About Us</title>"
+            "<meta name='description' content='Company info.'/>"
+            "<link rel='canonical' href='https://example.com/about'/>"
+            "</head><body><h1>About</h1></body></html>"
+        )
+        resource = _make_page_resource(content=html, url="https://example.com/about")
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.url == "https://example.com/about"
+        assert result.page_type == PageType.CORE
+        assert result.http_status == 200
+        assert result.is_https is True
+        assert result.page_title == "About Us"
+        assert result.meta_description == "Company info."
+        assert result.canonical_url == "https://example.com/about"
+        assert result.page_language == "en"
+        assert result.h1_tags == ["About"]
+
+    def test_meta_robots_extracted(self) -> None:
+        html = "<html><head><meta name='robots' content='noindex, nofollow'/></head><body/></html>"
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.UTILITY, "https://example.com")
+
+        assert result.meta_robots == "noindex, nofollow"
+
+    def test_missing_meta_robots_is_none(self) -> None:
+        resource = _make_page_resource(content="<html><head></head><body/></html>")
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.meta_robots is None
+
+    def test_open_graph_properties_extracted(self) -> None:
+        html = (
+            "<html><head>"
+            "<meta property='og:title' content='Great Page'/>"
+            "<meta property='og:image' content='https://example.com/img.png'/>"
+            "</head><body/></html>"
+        )
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.open_graph == {"title": "Great Page", "image": "https://example.com/img.png"}
+
+    def test_word_count_reflects_visible_text(self) -> None:
+        html = "<html><body><p>" + " ".join(["word"] * 42) + "</p></body></html>"
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.BLOG_ARTICLE, "https://example.com")
+
+        assert result.word_count == 42
+
+    def test_schema_types_extracted_from_json_ld(self) -> None:
+        html = (
+            "<html><head><script type='application/ld+json'>"
+            '{"@context": "https://schema.org", "@type": "LocalBusiness"}'
+            "</script></head><body/></html>"
+        )
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.LOCATION, "https://example.com")
+
+        assert result.schema_types == ["LocalBusiness"]
+
+    def test_schema_types_handles_graph_nesting(self) -> None:
+        html = (
+            "<html><head><script type='application/ld+json'>"
+            '{"@context": "https://schema.org", "@graph": ['
+            '{"@type": "Organization"}, {"@type": "WebSite"}]}'
+            "</script></head><body/></html>"
+        )
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.schema_types == ["Organization", "WebSite"]
+
+    def test_invalid_json_ld_is_skipped_not_raised(self) -> None:
+        html = "<html><head><script type='application/ld+json'>{not valid json</script></head><body/></html>"
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.schema_types == []
+
+    def test_used_playwright_fallback_is_passed_through(self) -> None:
+        resource = _make_page_resource(used_playwright_fallback=True)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.used_playwright_fallback is True
+
+    def test_redirect_chain_is_passed_through(self) -> None:
+        resource = _make_page_resource(redirect_chain=["https://example.com/old-about"])
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.redirect_chain == ["https://example.com/old-about"]
+
+    def test_links_and_images_classified(self) -> None:
+        html = (
+            "<html><body>"
+            "<a href='/contact'>Contact</a>"
+            "<a href='https://other-site.com/'>Other</a>"
+            "<img src='/logo.png' alt='Logo'/>"
+            "</body></html>"
+        )
+        resource = _make_page_resource(content=html)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.internal_links == ["https://example.com/contact"]
+        assert result.external_links == ["https://other-site.com/"]
+        assert len(result.images) == 1
+        assert result.images[0].alt == "Logo"
+
+    def test_failed_fetch_produces_empty_page_evidence(self) -> None:
+        resource = _make_page_resource(content="", status_code=404, is_success=False)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.page_title is None
+        assert result.http_status == 404
+        assert result.word_count == 0
+

@@ -15,8 +15,10 @@ them honestly rather than guessing.
 
 Public interface:
     extract(site: SiteFetchResult) -> AuditEvidence
+    build_page_evidence(resource, page_type, base_url) -> PageEvidence
 """
 
+import json  # Parses JSON-LD structured data blocks to find schema.org @type values
 import logging  # Standard logging — records extraction progress and field-level findings
 import re  # Used to parse robots.txt disallow/allow rules
 from dataclasses import dataclass, field  # Lightweight data containers for structured evidence
@@ -24,7 +26,14 @@ from urllib.parse import urljoin, urlparse  # URL manipulation for link classifi
 
 from bs4 import BeautifulSoup  # HTML parser; extracts structured elements from raw HTML
 
-from src.services.fetch_service import SiteFetchResult  # Input type from the fetch layer
+from src.services.audit_models import (
+    ImageInfo,  # Per-image evidence shape (defined in audit_models to avoid a circular import)
+    PageEvidence,  # Per-page evidence shape returned by build_page_evidence()
+    PageType,  # Deterministic page classification assigned by crawl_service
+    RobotsTxtEvidence,  # Robots.txt evidence shape
+    SitemapEvidence,  # Per-sitemap evidence shape
+)
+from src.services.fetch_service import FetchedResource, SiteFetchResult  # Input types from the fetch layer
 
 # Module-level logger
 logger = logging.getLogger(__name__)  # Resolves to "src.services.extractor_service"
@@ -49,81 +58,6 @@ _MAX_SITEMAP_URLS: int = 100
 # ---------------------------------------------------------------------------
 # Evidence data models
 # ---------------------------------------------------------------------------
-
-@dataclass
-class ImageInfo:
-    """
-    Metadata for a single image element found in the HTML.
-
-    Only information visible in the static HTML is recorded.
-    Whether the image actually loads is not verified in the MVP.
-    """
-
-    src: str
-    # The resolved URL of the image (absolute, after joining with the page base URL)
-
-    alt: str
-    # The alt attribute value; empty string "" if the attribute is present but blank
-
-    has_alt_attribute: bool
-    # True if an alt="" attribute exists at all (even if its value is empty)
-    # False if the alt attribute is completely absent from the <img> tag
-
-
-@dataclass
-class RobotsTxtEvidence:
-    """
-    Verified findings extracted from the /robots.txt file.
-
-    Only data present in the static file content is recorded.
-    Whether Google has actually obeyed the rules cannot be verified here.
-    """
-
-    is_accessible: bool
-    # True if the fetch returned HTTP 200; False for 404, timeout, or error
-
-    http_status: int
-    # The HTTP status code returned when fetching /robots.txt (0 if not fetched)
-
-    disallow_rules: list[str]
-    # All Disallow: values for the * (all robots) user-agent block
-
-    allow_rules: list[str]
-    # All Allow: values for the * (all robots) user-agent block
-
-    sitemap_urls: list[str]
-    # All Sitemap: directives found in robots.txt
-
-    blocks_root_path: bool
-    # True if Disallow: / or Disallow: /* appears in the * user-agent block
-    # This would block Googlebot from crawling the entire site — a critical finding
-
-
-@dataclass
-class SitemapEvidence:
-    """
-    Verified accessibility status of one sitemap file.
-
-    Only HTTP status and basic URL count are verified in the MVP.
-    Full sitemap validation (canonical URLs, changefreq accuracy, etc.)
-    requires a crawler and is out of scope.
-    """
-
-    url: str
-    # The full URL of the sitemap that was fetched
-
-    is_accessible: bool
-    # True if the fetch returned HTTP 200
-
-    http_status: int
-    # HTTP status code returned (0 if not fetched)
-
-    url_count: int
-    # Number of <loc> elements found in the sitemap XML (0 if not accessible or not XML)
-
-    urls: list[str] = field(default_factory=list)
-    # Actual <loc> URLs; gives the LLM page inventory to populate tables without "Not Detected"
-
 
 @dataclass
 class AuditEvidence:
@@ -326,6 +260,64 @@ def extract(site: SiteFetchResult) -> AuditEvidence:
     )
 
 
+def build_page_evidence(resource: FetchedResource, page_type: PageType, base_url: str) -> PageEvidence:
+    """
+    Extract verified SEO data from one crawled page (not just the homepage).
+
+    Reuses the same static-HTML extraction rules as extract(), plus the
+    fields only meaningful for sampled multi-page crawls: visible word
+    count, schema.org @type values, meta robots directives, Open Graph
+    properties, and the redirect chain/rendering mode already recorded
+    on the FetchedResource.
+
+    Args:
+        resource: The FetchedResource produced by crawl_service for this page.
+        page_type: The deterministic classification assigned during sampling.
+        base_url: The audited site's base URL, used to classify internal/external links.
+
+    Returns:
+        PageEvidence with every extractable field populated.
+    """
+    if resource.is_success and resource.content:
+        soup = BeautifulSoup(resource.content, _PARSER)
+    else:
+        soup = BeautifulSoup("", _PARSER)
+        logger.warning("Page not available for extraction: %s", resource.url)
+
+    images: list[ImageInfo] = _extract_images(soup, base_url)
+    internal_links, external_links = _extract_links(soup, base_url)
+
+    return PageEvidence(
+        url=resource.url,
+        page_type=page_type,
+
+        http_status=resource.status_code,
+        is_https=(resource.final_url or resource.url).startswith("https://"),
+
+        used_playwright_fallback=resource.used_playwright_fallback,
+
+        page_title=_extract_title(soup),
+        meta_description=_extract_meta_description(soup),
+        canonical_url=_extract_canonical(soup),
+        page_language=_extract_language(soup),
+
+        meta_robots=_extract_meta_robots(soup),
+        open_graph=_extract_open_graph(soup),
+
+        h1_tags=_extract_headings(soup, level=1),
+        h2_tags=_extract_headings(soup, level=2),
+
+        word_count=_count_words(soup),
+        schema_types=_extract_schema_types(soup),
+
+        internal_links=internal_links,
+        external_links=external_links,
+        images=images,
+
+        redirect_chain=list(resource.redirect_chain),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Private extraction helpers — HTML
 # ---------------------------------------------------------------------------
@@ -479,6 +471,76 @@ def _extract_images(soup: BeautifulSoup, base_url: str) -> list[ImageInfo]:
         ))
 
     return images
+
+
+def _extract_meta_robots(soup: BeautifulSoup) -> str | None:
+    """Extract the content attribute from <meta name='robots'>."""
+    tag = soup.find("meta", attrs={"name": re.compile(r"^robots$", re.IGNORECASE)})
+    if not tag:
+        return None  # No page-level directive — indexing follows default engine behaviour
+    content: str | None = tag.get("content")  # type: ignore[assignment]
+    if not content:
+        return None
+    content = content.strip()
+    return content if content else None
+
+
+def _extract_open_graph(soup: BeautifulSoup) -> dict[str, str]:
+    """
+    Extract Open Graph <meta property="og:*"> tags into a dict keyed
+    without the "og:" prefix (e.g. {"title": ..., "image": ...}).
+    """
+    properties: dict[str, str] = {}
+    for tag in soup.find_all("meta", property=re.compile(r"^og:", re.IGNORECASE)):
+        raw_property: str = tag.get("property", "")  # type: ignore[assignment]
+        content: str | None = tag.get("content")  # type: ignore[assignment]
+        if not raw_property or not content:
+            continue
+        key: str = raw_property.split(":", 1)[1].strip().lower()
+        if key:
+            properties[key] = content.strip()
+    return properties
+
+
+def _count_words(soup: BeautifulSoup) -> int:
+    """Count visible body words, used to flag thin content and JS-shell pages."""
+    visible_text: str = soup.get_text(separator=" ", strip=True)
+    return len(visible_text.split())
+
+
+def _extract_schema_types(soup: BeautifulSoup) -> list[str]:
+    """
+    Extract schema.org @type values from JSON-LD <script> blocks.
+
+    Handles a single object, a top-level list of objects, and @graph
+    nesting. Malformed JSON-LD is skipped rather than raising, since it
+    is common for real-world sites to ship invalid structured data.
+    """
+    types: list[str] = []
+
+    for tag in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.IGNORECASE)}):
+        raw_json: str = tag.get_text(strip=True)
+        if not raw_json:
+            continue
+        try:
+            parsed = json.loads(raw_json)
+        except (json.JSONDecodeError, ValueError):
+            continue  # Skip invalid JSON-LD rather than failing the whole extraction
+
+        candidates: list[object] = parsed if isinstance(parsed, list) else [parsed]
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for graph_item in candidate.get("@graph", []) or []:
+                if isinstance(graph_item, dict):
+                    candidates.append(graph_item)
+            schema_type = candidate.get("@type")
+            if isinstance(schema_type, str):
+                types.append(schema_type)
+            elif isinstance(schema_type, list):
+                types.extend(value for value in schema_type if isinstance(value, str))
+
+    return sorted(set(types))  # Deduplicated, deterministic order
 
 
 # ---------------------------------------------------------------------------

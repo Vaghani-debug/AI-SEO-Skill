@@ -89,6 +89,12 @@ class FetchedResource:
     error_message: str = ""
     # Plain-English description of what went wrong; empty string on success
 
+    used_playwright_fallback: bool = False
+    # True when the httpx result looked like a JS shell and Playwright re-rendered it
+
+    redirect_chain: list[str] = field(default_factory=list)
+    # Intermediate URLs visited before final_url, in order; empty if no redirect occurred
+
 
 @dataclass
 class SiteFetchResult:
