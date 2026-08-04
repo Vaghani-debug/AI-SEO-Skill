@@ -525,6 +525,9 @@ def _format_evidence(normalized_url: str, evidence: AuditEvidence) -> str:
                 else f"Not accessible (HTTP {sitemap.http_status})"
             )
             lines.append(f"- {sitemap.url}: {status_text}")
+            # Include discovered URLs so the LLM can populate page-inventory tables
+            for u in sitemap.urls:
+                lines.append(f"  - {u}")
 
     lines.append("")
 

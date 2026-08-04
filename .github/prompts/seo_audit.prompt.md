@@ -47,13 +47,15 @@ If data exists:
 
 - populate the appropriate placeholders.
 
-If data does not exist:
+If specific data (such as per-page title or description) is unavailable because only the
+homepage was fetched:
 
-- clearly state that verified data was unavailable.
-- never fabricate information.
-- provide industry best practices.
-- explain why the information is important.
-- provide implementation recommendations where appropriate.
+- Do NOT write "Not Detected" — this phrase is forbidden in the report.
+- Derive the Page Name from the URL slug (e.g. /services/hair-transplant/ → Hair Transplant).
+- Use the sitemap <loc> URLs for the URL column in all page inventory tables.
+- For the homepage row, use the verified title, description, H1, and links from the evidence.
+- For all other rows, provide targeted SEO recommendations based on the URL structure and page type.
+- Briefly acknowledge that a full per-page metadata audit requires fetching each URL individually.
 
 ---
 
@@ -151,8 +153,10 @@ Never remove a table.
 
 Never reorder table columns.
 
-If values are unavailable,
-leave the table structure intact and populate the explanation accordingly.
+Never write "Not Detected" in any table cell.
+
+Populate page inventory tables using the sitemap <loc> URLs provided in the evidence.
+Derive the Page Name from the URL slug for every row beyond the homepage.
 
 ---
 
@@ -225,6 +229,8 @@ Before returning the report, verify that:
 ✓ Placeholder values are populated only with verified evidence.
 
 ✓ Markdown formatting remains valid.
+
+✓ The phrase "Not Detected" does not appear anywhere in the report.
 
 ---
 

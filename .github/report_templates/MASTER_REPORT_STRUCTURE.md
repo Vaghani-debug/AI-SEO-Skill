@@ -4,22 +4,23 @@
 
 ### Core Pages Table
 
-| #Index | Page Name | URL | Title Tag | SEO Notes |
-|--------|-----------|-----|-----------|-----------|
+| #Index | URL | Page Name (derived from URL) | SEO Notes |
+|--------|-----|------------------------------|-----------|
+
 
 ## 1.2 Service Sub-Pages
 
 ### Service Pages Table
 
-| #Index | Page Name | URL | Current Status |
-|--------|-----------|-----|----------------|
+| #Index | URL | Page Name (derived from URL) | Current Status |
+|--------|-----|------------------------------|----------------|
 
 ## 1.3 Blog Posts (from sitemap/post.xml)
 
 ### Blog Posts Table
 
-| #Index | Blog URL |
-|--------|----------|
+| #Index | Blog URL | Slug-Based Topic |
+|--------|----------|-----------------|
 
 ### Blog Summary
 

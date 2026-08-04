@@ -42,6 +42,9 @@ _PARSER: str = "lxml"
 # Maximum number of internal/external links to store per page (prevents enormous lists)
 _MAX_LINKS: int = 200
 
+# Cap per-sitemap URL list to keep evidence text within LLM context limits
+_MAX_SITEMAP_URLS: int = 100
+
 
 # ---------------------------------------------------------------------------
 # Evidence data models
@@ -117,6 +120,9 @@ class SitemapEvidence:
 
     url_count: int
     # Number of <loc> elements found in the sitemap XML (0 if not accessible or not XML)
+
+    urls: list[str] = field(default_factory=list)
+    # Actual <loc> URLs; gives the LLM page inventory to populate tables without "Not Detected"
 
 
 @dataclass
@@ -584,28 +590,32 @@ def _parse_sitemaps(site: SiteFetchResult) -> list[SitemapEvidence]:
     evidences: list[SitemapEvidence] = []
 
     for sitemap_resource in site.all_sitemaps:
-        url_count: int = 0  # Start at 0; only increment if we can parse the XML
+        url_count: int = 0
+        sitemap_page_urls: list[str] = []
 
         if sitemap_resource.is_success and sitemap_resource.content:
             try:
-                # Use BeautifulSoup to count <loc> tags in the sitemap XML
                 sitemap_soup = BeautifulSoup(sitemap_resource.content, "xml")
-                # "xml" parser is stricter and correct for sitemap XML files
-                url_count = len(sitemap_soup.find_all("loc"))
-                # Each <loc> element represents one URL entry in the sitemap
+                loc_tags = sitemap_soup.find_all("loc")
+                url_count = len(loc_tags)
+                # Preserve actual URLs so the LLM can populate page-inventory tables
+                sitemap_page_urls = [
+                    tag.get_text(strip=True)
+                    for tag in loc_tags[:_MAX_SITEMAP_URLS]
+                ]
             except Exception as parse_error:
                 logger.warning(
                     "Could not parse sitemap XML at %s: %s",
                     sitemap_resource.url,
                     parse_error,
                 )
-                # url_count stays 0; the sitemap was accessible but not valid XML
 
         evidences.append(SitemapEvidence(
             url=sitemap_resource.url,
             is_accessible=sitemap_resource.is_success,
             http_status=sitemap_resource.status_code,
             url_count=url_count,
+            urls=sitemap_page_urls,
         ))
 
     return evidences

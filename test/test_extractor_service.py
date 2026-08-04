@@ -413,6 +413,11 @@ class TestSitemapEvidence:
         sitemap = next((s for s in result.sitemaps if "sitemap.xml" in s.url), None)
         assert sitemap is not None
         assert sitemap.url_count == 3
+        assert sitemap.urls == [
+            "https://example.com/",
+            "https://example.com/about",
+            "https://example.com/contact",
+        ]
 
     def test_missing_sitemap_recorded(self) -> None:
         """A 404 sitemap.xml is recorded with is_accessible=False."""
