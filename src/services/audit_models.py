@@ -399,3 +399,49 @@ class AuditContext:
     is_local_business: bool
     city_or_region: str | None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# In-process job state (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class AuditJobStatus(str, Enum):
+    """Lifecycle phase of one in-process audit job, reported via the status endpoint."""
+
+    PENDING = "pending"
+    CRAWLING = "crawling"
+    RESEARCHING = "researching"
+    GENERATING = "generating"
+    ASSEMBLING = "assembling"
+    RENDERING_PDF = "rendering_pdf"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+
+@dataclass
+class AuditJob:
+    """
+    Persisted state for one in-process audit job.
+
+    Created immediately when a start-audit request is accepted (before any
+    crawling/generation begins) and updated in place as the job progresses,
+    so a status endpoint can report real progress instead of the caller
+    blocking until the whole pipeline finishes. Mutable (unlike AuditContext)
+    because status/error/output fields are set at different pipeline stages.
+    """
+
+    audit_id: str
+    normalized_url: str
+    status: AuditJobStatus
+    created_at: datetime
+    updated_at: datetime
+
+    markdown_report: str | None = None
+    # Set once assembly completes; None while pending/in-progress or on failure
+
+    pdf_path: str | None = None
+    # Set once the PDF has been rendered to disk; None until then
+
+    error: str | None = None
+    # Human-readable failure reason; set only when status is FAILED

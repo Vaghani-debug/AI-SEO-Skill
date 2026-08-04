@@ -77,6 +77,49 @@ class AuditResult(BaseModel):
     )
 
 
+class AuditStatusResult(BaseModel):
+    """
+    Current in-process job status for an audit, returned by the status
+    endpoint so the UI can poll progress without waiting for the full
+    synchronous POST /audits/ response.
+    """
+
+    audit_id: str = Field(
+        ...,  # Required — the same ID returned by POST /audits/
+        description="Unique identifier for this audit job",
+    )
+
+    url: str = Field(
+        ...,  # Required — the normalised URL this job is auditing
+        description="Normalised URL this audit job is processing",
+    )
+
+    status: str = Field(
+        ...,  # Required — one of AuditJobStatus's values (pending, crawling, ..., complete, failed)
+        description="Current lifecycle status of the audit job",
+    )
+
+    created_at: datetime = Field(
+        ...,  # Required — when the job was first created
+        description="UTC timestamp when the audit job was created",
+    )
+
+    updated_at: datetime = Field(
+        ...,  # Required — when the job's status/fields last changed
+        description="UTC timestamp when the audit job was last updated",
+    )
+
+    error: Optional[str] = Field(
+        default=None,  # Only present when status is "failed"
+        description="Error message if the job failed, otherwise null",
+    )
+
+    pdf_download_url: Optional[str] = Field(
+        default=None,  # Only present once the PDF has been generated
+        description="Relative URL to download the PDF once available, otherwise null",
+    )
+
+
 class AuditError(BaseModel):
     """
     Error response returned when an audit fails for any reason.

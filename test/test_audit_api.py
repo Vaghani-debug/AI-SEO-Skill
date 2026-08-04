@@ -18,6 +18,7 @@ Run with:
 """
 
 import json  # Used to write fixture JSON files for the GET retrieval tests
+import uuid  # Used to pin start_audit()'s generated job/audit_id in job-tracking tests
 from datetime import datetime, timezone  # For constructing fixture ReportResult objects
 from pathlib import Path  # Used to create fixture PDF and JSON files in tmp_path
 from unittest.mock import AsyncMock, MagicMock, patch  # All mocking tools needed
@@ -162,6 +163,103 @@ def _patch_full_pipeline(tmp_path: Path, audit_id: str = "test-audit-id-001"):
             yield
 
     return _ctx()
+
+
+# ---------------------------------------------------------------------------
+# Helper: patch all services for a successful new-pipeline run
+# ---------------------------------------------------------------------------
+
+def _patch_new_pipeline(tmp_path: Path, audit_id: str = "test-audit-id-002"):
+    """
+    Return a context manager that patches the new sampled-crawl + section
+    pipeline (build_site_evidence/build_audit_context/generate_report_sections/
+    assemble_and_validate_report) to simulate a complete successful audit
+    without any real network, crawl, or LLM calls.
+    """
+    import contextlib
+
+    pdf_path = _mock_pdf_path(tmp_path, audit_id)
+
+    context = MagicMock()
+    context.audit_id = audit_id
+    context.created_at = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
+
+    assembled = MagicMock()
+    assembled.markdown_report = "# SEO Audit Report\n\n## Executive Summary\n\nGood site."
+    assembled.issues = []
+    assembled.is_valid = True
+
+    @contextlib.contextmanager
+    def _ctx():
+        with (
+            patch(
+                "src.api.routes.audit._settings.reports_dir",
+                str(tmp_path / "reports"),
+            ),
+            patch("src.api.routes.audit._settings.use_new_report_pipeline", True),
+            patch(
+                "src.api.routes.audit.load_prompt_context",
+                return_value=MagicMock(),  # PromptContext mock
+            ),
+            patch(
+                "src.api.routes.audit.build_site_evidence",
+                new=AsyncMock(return_value=MagicMock()),  # SiteEvidence mock
+            ),
+            patch(
+                "src.api.routes.audit.build_audit_context",
+                new=AsyncMock(return_value=context),
+            ),
+            patch(
+                "src.api.routes.audit.generate_report_sections",
+                new=AsyncMock(return_value={"executive_summary": "..."}),
+            ),
+            patch(
+                "src.api.routes.audit.assemble_and_validate_report",
+                return_value=assembled,
+            ),
+            patch(
+                "src.api.routes.audit.generate_pdf",
+                return_value=pdf_path,  # Return the pre-created PDF path
+            ),
+        ):
+            yield
+
+    return _ctx()
+
+
+class TestStartAuditNewPipeline:
+    """Tests for the new section pipeline, enabled via settings.use_new_report_pipeline."""
+
+    def test_returns_202_with_assembled_report(self, client: TestClient, tmp_path: Path) -> None:
+        """A valid URL returns HTTP 202 with the assembled report's Markdown and audit ID."""
+        with _patch_new_pipeline(tmp_path):
+            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
+        assert response.status_code == 202
+        data = response.json()
+        assert data["audit_id"] == "test-audit-id-002"
+        assert "Executive Summary" in data["markdown_report"]
+
+    def test_legacy_fetch_is_not_called(self, client: TestClient, tmp_path: Path) -> None:
+        """The old fetch_site()/extract() flow is skipped entirely when the flag is on."""
+        with _patch_new_pipeline(tmp_path), patch("src.api.routes.audit.fetch_site") as fetch_mock:
+            client.post("/api/v1/audits/", json={"url": "https://example.com"})
+        fetch_mock.assert_not_called()
+
+    def test_invalid_validation_issues_do_not_block_the_response(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """A checkpoint failure (is_valid=False) still returns the assembled report, not an error."""
+        with _patch_new_pipeline(tmp_path) as _, patch(
+            "src.api.routes.audit.assemble_and_validate_report",
+            return_value=MagicMock(
+                markdown_report="# SEO Audit Report\n\nPartial content.",
+                issues=["Missing required PART headings: PART 9"],
+                is_valid=False,
+            ),
+        ):
+            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
+        assert response.status_code == 202
+        assert "Partial content" in response.json()["markdown_report"]
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +441,110 @@ class TestStartAuditServiceErrors:
         assert response.status_code == 202
         assert response.json()["markdown_report"]  # Markdown still present
         assert response.json()["pdf_download_url"] == ""  # Empty URL when PDF unavailable
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/audits/ — in-process job tracking (Phase 5)
+# ---------------------------------------------------------------------------
+
+class TestStartAuditJobTracking:
+    """Tests confirming start_audit() creates and updates an in-process job record."""
+
+    def test_job_reaches_complete_status_after_a_successful_audit(
+        self, client: TestClient, tmp_path: Path,
+    ) -> None:
+        """A successful audit's job record transitions through to COMPLETE."""
+        from src.services.audit_job_service import get_job
+        from src.services.audit_models import AuditJobStatus
+
+        fixed_id = uuid.uuid4()
+        with (
+            _patch_full_pipeline(tmp_path),
+            patch("src.api.routes.audit.uuid.uuid4", return_value=fixed_id),
+        ):
+            client.post("/api/v1/audits/", json={"url": "https://example.com"})
+
+        job = get_job(str(fixed_id))
+        assert job is not None
+        assert job.status == AuditJobStatus.COMPLETE
+        assert job.markdown_report  # Non-empty Markdown recorded on the job
+
+    def test_job_reaches_failed_status_after_a_pipeline_error(
+        self, client: TestClient, tmp_path: Path,
+    ) -> None:
+        """A downstream failure still records a job, marked FAILED with the error message."""
+        from src.services.audit_job_service import get_job
+        from src.services.audit_models import AuditJobStatus
+
+        fixed_id = uuid.uuid4()
+        with (
+            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
+            patch("src.api.routes.audit.fetch_site", new=AsyncMock(return_value=_make_site_fetch_result())),
+            patch("src.api.routes.audit.extract", return_value=MagicMock()),
+            patch(
+                "src.api.routes.audit.load_prompt_context",
+                side_effect=FileNotFoundError("seo_audit.prompt.md not found"),
+            ),
+            patch("src.api.routes.audit.uuid.uuid4", return_value=fixed_id),
+        ):
+            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
+
+        assert response.status_code == 500
+        job = get_job(str(fixed_id))
+        assert job is not None
+        assert job.status == AuditJobStatus.FAILED
+        assert job.error  # Non-empty error message recorded
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/audits/{audit_id}/status — in-process job status
+# ---------------------------------------------------------------------------
+
+class TestGetAuditStatus:
+    """Tests for the job status endpoint."""
+
+    def test_known_job_returns_200_with_status(self, client: TestClient) -> None:
+        """A job created via create_job() is retrievable through the status endpoint."""
+        from src.services.audit_job_service import create_job
+
+        job = create_job("https://example.com")
+        response = client.get(f"/api/v1/audits/{job.audit_id}/status")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["audit_id"] == job.audit_id
+        assert data["status"] == "pending"
+        assert data["url"] == "https://example.com"
+        assert data["error"] is None
+        assert data["pdf_download_url"] is None
+
+    def test_completed_job_includes_pdf_download_url(self, client: TestClient) -> None:
+        """A COMPLETE job with a pdf_path exposes a pdf_download_url."""
+        from src.services.audit_job_service import create_job, update_job
+        from src.services.audit_models import AuditJobStatus
+
+        job = create_job("https://example.com")
+        update_job(job.audit_id, status=AuditJobStatus.COMPLETE, pdf_path="/reports/x.pdf")
+        response = client.get(f"/api/v1/audits/{job.audit_id}/status")
+        data = response.json()
+        assert data["status"] == "complete"
+        assert data["pdf_download_url"] == f"/api/v1/audits/{job.audit_id}/pdf"
+
+    def test_failed_job_includes_error_message(self, client: TestClient) -> None:
+        """A FAILED job's error message is exposed in the status response."""
+        from src.services.audit_job_service import create_job, update_job
+        from src.services.audit_models import AuditJobStatus
+
+        job = create_job("https://example.com")
+        update_job(job.audit_id, status=AuditJobStatus.FAILED, error="Something went wrong")
+        response = client.get(f"/api/v1/audits/{job.audit_id}/status")
+        data = response.json()
+        assert data["status"] == "failed"
+        assert data["error"] == "Something went wrong"
+
+    def test_unknown_audit_id_returns_404(self, client: TestClient) -> None:
+        """An audit_id with no in-process job record returns 404 Not Found."""
+        response = client.get("/api/v1/audits/does-not-exist/status")
+        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------

@@ -120,6 +120,17 @@ class Settings(BaseSettings):
         description="Directory path (relative to project root) where audit reports are stored",
     )
 
+    # --- Report Pipeline -----------------------------------------------------
+
+    use_new_report_pipeline: bool = Field(
+        default=False,  # Old one-shot generate_report() flow remains the default until the new path is proven
+        description=(
+            "When True, audits run through the new sampled-crawl + section-generation "
+            "pipeline (build_site_evidence/build_audit_context/generate_report_sections) "
+            "instead of the original one-shot AuditEvidence flow"
+        ),
+    )
+
     # --- Application ---------------------------------------------------------
 
     app_title: str = Field(
