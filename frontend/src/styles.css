@@ -59,6 +59,12 @@ input {
   line-height: 1.6;
 }
 
+.audit-notice {
+  margin-top: 12px;
+  color: #445168;
+  font-size: 0.94rem;
+}
+
 .audit-form {
   display: grid;
   gap: 10px;

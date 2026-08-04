@@ -5,22 +5,23 @@
 Project Name: AI SEO Agent
 This repository contains the implementation of an AI-powered SEO auditing platform.
 The project is currently in the Minimum Viable Product (MVP) phase.
-The MVP focuses on delivering one high-quality SEO audit using a single AI agent.
+The MVP focuses on delivering one high-quality SEO audit along with SEO Strategy using a single AI agent.
 The objective is to build a production-ready platform rather than a proof of concept.
 
 ---
 
 # Product Objective
 
-The primary objective is to automate professional SEO audits while maintaining high accuracy, consistency, and business value.
+The primary objective is to automate professional SEO audits with SEO improvement strategies while maintaining high accuracy, consistency, and business value.
 
 The system should:
 
 - Audit websites
 - Detect SEO issues
+- Provide actionable recommendations
 - Prioritize findings
 - Generate AI recommendations
-- Produce a professional PDF report
+- Give answers in Table format only
 - Answer follow-up questions based on the generated report
 
 Always optimize for business value rather than feature count.
@@ -41,21 +42,6 @@ Every recommendation should explain:
 - Estimated implementation effort
 
 The AI should educate users rather than simply list issues.
-
----
-
-# Architecture
-
-The MVP uses a Single AI Agent architecture.
-
-Do NOT introduce:
-
-- Multi-agent orchestration
-- Planner agents
-- Task delegation
-- Distributed execution
-
-Future versions may evolve toward a hybrid architecture.
 
 ---
 
@@ -162,28 +148,10 @@ Use environment variables for configuration.
 The AI should behave as:
 
 Senior Technical SEO Consultant
-The AI should never hallucinate technical findings.
 Always explain recommendations in plain business and technical language.
 
----
-
-# Report Generation
-
-Follow:
-
-docs/REPORT_SPECIFICATION.md
-
-Generate reports that are:
-
-- Professional
-- Consistent
-- Actionable
-- Client-ready
-
-Do not change report structure without explicit approval.
 
 ---
-
 
 # Code Generation Rules
 
@@ -194,7 +162,6 @@ Extract reusable functionality.
 Use configuration instead of hardcoded values.
 
 ---
-
 
 # Performance
 

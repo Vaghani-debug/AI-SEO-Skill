@@ -36,6 +36,11 @@ export default function App() {
             Enter a website URL to start the first step toward a structured SEO
             audit report.
           </p>
+          <p className="audit-notice">
+            For the most complete result, enter the main homepage URL. Coverage
+            depends on the live pages the system can discover from navigation,
+            footer links, robots.txt, and sitemap signals.
+          </p>
         </div>
 
         <AuditForm onSubmit={handleAuditSubmit} isLoading={isLoading} />

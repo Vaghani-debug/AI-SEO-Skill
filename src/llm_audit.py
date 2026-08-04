@@ -14,7 +14,7 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 # Default model for Perplexity provider.
 DEFAULT_PERPLEXITY_MODEL = "sonar-pro"
 # Default sampling temperature for generation requests.
-DEFAULT_TEMPERATURE = 1.0
+DEFAULT_TEMPERATURE = 0.2
 # Default retry attempts per model before failing.
 DEFAULT_MAX_RETRY_COUNT = 1
 
