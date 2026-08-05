@@ -19,6 +19,7 @@ from src.services.extractor_service import (
     RobotsTxtEvidence,
     SitemapEvidence,
     build_page_evidence,
+    build_security_headers_evidence,
     extract,
 )
 from src.services.fetch_service import FetchedResource, SiteFetchResult
@@ -61,6 +62,48 @@ def _make_site(
 # ---------------------------------------------------------------------------
 # AuditEvidence structure tests
 # ---------------------------------------------------------------------------
+
+class TestBuildSecurityHeadersEvidence:
+    """Tests for build_security_headers_evidence()."""
+
+    def test_all_headers_present(self) -> None:
+        headers = {
+            "strict-transport-security": "max-age=31536000; includeSubDomains",
+            "content-security-policy": "default-src 'self'",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY",
+            "referrer-policy": "no-referrer",
+        }
+        result = build_security_headers_evidence(headers)
+
+        assert result.has_hsts is True
+        assert result.hsts_value == "max-age=31536000; includeSubDomains"
+        assert result.has_content_security_policy is True
+        assert result.content_security_policy_value == "default-src 'self'"
+        assert result.has_x_content_type_options is True
+        assert result.x_content_type_options_value == "nosniff"
+        assert result.has_x_frame_options is True
+        assert result.x_frame_options_value == "DENY"
+        assert result.has_referrer_policy is True
+        assert result.referrer_policy_value == "no-referrer"
+
+    def test_no_headers_present(self) -> None:
+        result = build_security_headers_evidence({})
+
+        assert result.has_hsts is False
+        assert result.hsts_value is None
+        assert result.has_content_security_policy is False
+        assert result.has_x_content_type_options is False
+        assert result.has_x_frame_options is False
+        assert result.has_referrer_policy is False
+
+    def test_partial_headers_present(self) -> None:
+        result = build_security_headers_evidence({"x-frame-options": "SAMEORIGIN"})
+
+        assert result.has_x_frame_options is True
+        assert result.has_hsts is False
+        assert result.has_content_security_policy is False
+
 
 class TestExtractReturnsCorrectType:
     """Verify that extract() always returns a properly typed AuditEvidence."""

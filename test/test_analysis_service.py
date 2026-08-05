@@ -17,7 +17,9 @@ from src.services.audit_models import (
     ImageInfo,
     PageEvidence,
     PageType,
+    PerformanceEvidence,
     RobotsTxtEvidence,
+    SecurityHeadersEvidence,
     SitemapEvidence,
     SiteEvidence,
 )
@@ -73,6 +75,8 @@ def _make_site(
     sampled_pages: list[PageEvidence] | None = None,
     robots_txt: RobotsTxtEvidence | None = _UNSET,  # type: ignore[assignment]
     sitemaps: list[SitemapEvidence] | None = None,
+    security_headers: SecurityHeadersEvidence | None = None,
+    performance: PerformanceEvidence | None = None,
 ) -> SiteEvidence:
     return SiteEvidence(
         base_url="https://example.com",
@@ -90,6 +94,28 @@ def _make_site(
         sitemaps=sitemaps if sitemaps is not None else [
             SitemapEvidence(url="https://example.com/sitemap.xml", is_accessible=True, http_status=200, url_count=5)
         ],
+        security_headers=security_headers,
+        performance=performance,
+    )
+
+
+def _make_secure_headers(
+    has_hsts: bool = True,
+    has_content_security_policy: bool = True,
+    has_x_content_type_options: bool = True,
+    has_x_frame_options: bool = True,
+) -> SecurityHeadersEvidence:
+    return SecurityHeadersEvidence(
+        has_hsts=has_hsts,
+        hsts_value="max-age=31536000" if has_hsts else None,
+        has_content_security_policy=has_content_security_policy,
+        content_security_policy_value="default-src 'self'" if has_content_security_policy else None,
+        has_x_content_type_options=has_x_content_type_options,
+        x_content_type_options_value="nosniff" if has_x_content_type_options else None,
+        has_x_frame_options=has_x_frame_options,
+        x_frame_options_value="DENY" if has_x_frame_options else None,
+        has_referrer_policy=True,
+        referrer_policy_value="no-referrer",
     )
 
 
@@ -307,6 +333,152 @@ class TestSecurityChecks:
         site = _make_site(homepage=_make_page(is_https=True))
         result = analyze_site(site)
         assert not any(f.category == "Security" for f in result.findings)
+
+    def test_https_site_with_all_headers_present_has_no_security_findings(self) -> None:
+        site = _make_site(homepage=_make_page(is_https=True), security_headers=_make_secure_headers())
+        result = analyze_site(site)
+        assert not any(f.category == "Security" for f in result.findings)
+
+    def test_missing_hsts_flagged_when_https_and_headers_known(self) -> None:
+        site = _make_site(
+            homepage=_make_page(is_https=True),
+            security_headers=_make_secure_headers(has_hsts=False),
+        )
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "HSTS" in f.title)
+        assert finding.score_deduction == 15.0
+
+    def test_hsts_not_flagged_when_site_is_not_https(self) -> None:
+        site = _make_site(
+            homepage=_make_page(is_https=False),
+            security_headers=_make_secure_headers(has_hsts=False),
+        )
+        result = analyze_site(site)
+        assert not any("HSTS" in f.title for f in result.findings)
+
+    def test_missing_content_security_policy_flagged(self) -> None:
+        site = _make_site(
+            homepage=_make_page(is_https=True),
+            security_headers=_make_secure_headers(has_content_security_policy=False),
+        )
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "Content-Security-Policy" in f.title)
+        assert finding.score_deduction == 10.0
+
+    def test_missing_x_content_type_options_flagged(self) -> None:
+        site = _make_site(
+            homepage=_make_page(is_https=True),
+            security_headers=_make_secure_headers(has_x_content_type_options=False),
+        )
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "X-Content-Type-Options" in f.title)
+        assert finding.score_deduction == 8.0
+
+    def test_missing_x_frame_options_flagged(self) -> None:
+        site = _make_site(
+            homepage=_make_page(is_https=True),
+            security_headers=_make_secure_headers(has_x_frame_options=False),
+        )
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "X-Frame-Options" in f.title)
+        assert finding.score_deduction == 12.0
+
+    def test_all_headers_missing_deducts_full_expected_total(self) -> None:
+        headers = SecurityHeadersEvidence(
+            has_hsts=False, hsts_value=None,
+            has_content_security_policy=False, content_security_policy_value=None,
+            has_x_content_type_options=False, x_content_type_options_value=None,
+            has_x_frame_options=False, x_frame_options_value=None,
+            has_referrer_policy=False, referrer_policy_value=None,
+        )
+        site = _make_site(homepage=_make_page(is_https=True), security_headers=headers)
+        result = analyze_site(site)
+        security = next(cs for cs in result.category_scores if cs.category == "Security")
+        assert security.score == 55.0  # 100 - (15 + 10 + 8 + 12)
+
+    def test_no_security_headers_evidence_only_checks_https(self) -> None:
+        # security_headers=None (not collected) - must not fabricate header findings.
+        site = _make_site(homepage=_make_page(is_https=True), security_headers=None)
+        result = analyze_site(site)
+        assert result.findings == []
+
+
+# ---------------------------------------------------------------------------
+# Performance checks
+# ---------------------------------------------------------------------------
+
+def _make_performance(
+    is_available: bool = True,
+    data_source: str = "field",
+    lcp_ms: float | None = 2000.0,
+    cls_score: float | None = 0.05,
+    inp_ms: float | None = 150.0,
+) -> PerformanceEvidence:
+    return PerformanceEvidence(
+        is_available=is_available,
+        data_source=data_source,
+        performance_score=95.0,
+        largest_contentful_paint_ms=lcp_ms,
+        cumulative_layout_shift=cls_score,
+        interaction_to_next_paint_ms=inp_ms,
+        source_url="https://example.com",
+    )
+
+
+class TestPerformanceChecks:
+
+    def test_no_performance_evidence_has_no_findings(self) -> None:
+        # performance=None (PSI unavailable) - never penalize for missing evidence.
+        site = _make_site(performance=None)
+        result = analyze_site(site)
+        assert not any(f.category == "Performance" for f in result.findings)
+
+    def test_unavailable_performance_evidence_has_no_findings(self) -> None:
+        site = _make_site(performance=_make_performance(is_available=False))
+        result = analyze_site(site)
+        assert not any(f.category == "Performance" for f in result.findings)
+
+    def test_good_metrics_have_no_findings(self) -> None:
+        site = _make_site(performance=_make_performance(lcp_ms=2000.0, cls_score=0.05, inp_ms=150.0))
+        result = analyze_site(site)
+        assert not any(f.category == "Performance" for f in result.findings)
+
+    def test_poor_lcp_flagged(self) -> None:
+        site = _make_site(performance=_make_performance(lcp_ms=5000.0))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "Largest Contentful Paint" in f.title)
+        assert finding.severity.value == "High"
+        assert finding.score_deduction == 35.0
+
+    def test_lcp_needs_improvement_flagged(self) -> None:
+        site = _make_site(performance=_make_performance(lcp_ms=3000.0))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "Largest Contentful Paint" in f.title)
+        assert finding.severity.value == "Medium"
+        assert finding.score_deduction == 15.0
+
+    def test_poor_cls_flagged(self) -> None:
+        site = _make_site(performance=_make_performance(cls_score=0.35))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "Cumulative Layout Shift" in f.title)
+        assert finding.score_deduction == 30.0
+
+    def test_poor_inp_flagged(self) -> None:
+        site = _make_site(performance=_make_performance(inp_ms=700.0))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "Interaction to Next Paint" in f.title)
+        assert finding.score_deduction == 25.0
+
+    def test_all_metrics_poor_deducts_full_expected_total(self) -> None:
+        site = _make_site(performance=_make_performance(lcp_ms=5000.0, cls_score=0.35, inp_ms=700.0))
+        result = analyze_site(site)
+        performance = next(cs for cs in result.category_scores if cs.category == "Performance")
+        assert performance.score == 10.0  # 100 - (35 + 30 + 25)
+
+    def test_missing_inp_metric_only_checks_available_metrics(self) -> None:
+        site = _make_site(performance=_make_performance(lcp_ms=2000.0, cls_score=0.05, inp_ms=None))
+        result = analyze_site(site)
+        assert not any(f.category == "Performance" for f in result.findings)
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,16 @@ class Settings(BaseSettings):
         description="LLM provider to use: 'gemini' or 'perplexity'",
     )
 
+    perplexity_retry_attempts: int = Field(
+        default=3,  # e.g. a transient rate-limit or 5xx on attempt 1 gets two more chances
+        description="Maximum attempts for a single Perplexity research call before giving up on transient failures",
+    )
+
+    perplexity_retry_backoff_base_seconds: float = Field(
+        default=1.0,  # Exponential backoff: 1.0s, 2.0s, 4.0s, ... between retry attempts
+        description="Base delay in seconds for exponential backoff between Perplexity retry attempts",
+    )
+
     # --- HTTP Fetch ----------------------------------------------------------
 
     fetch_timeout_seconds: int = Field(
@@ -64,6 +74,38 @@ class Settings(BaseSettings):
     fetch_max_redirects: int = Field(
         default=5,  # Limit redirect chains to prevent infinite loops on misconfigured sites
         description="Maximum number of HTTP redirects to follow when fetching a URL",
+    )
+
+    fetch_retry_attempts: int = Field(
+        default=3,  # e.g. a transient 503 or timeout on attempt 1 gets two more chances
+        description="Maximum attempts for a single fetch before giving up on transient failures",
+    )
+
+    fetch_retry_backoff_base_seconds: float = Field(
+        default=0.5,  # Exponential backoff: 0.5s, 1.0s, 2.0s, ... between retry attempts
+        description="Base delay in seconds for exponential backoff between fetch retry attempts",
+    )
+
+    wayback_fallback_enabled: bool = Field(
+        default=True,  # Fall back to a real, citable archived snapshot rather than leaving evidence empty
+        description="When True, fetch an archive.org snapshot if a live fetch fails after all retries",
+    )
+
+    # --- PageSpeed Insights (Core Web Vitals / Performance) -------------------
+
+    pagespeed_enabled: bool = Field(
+        default=True,  # Free public API; disable only for offline/test environments without network access
+        description="When True, call Google PageSpeed Insights for real Core Web Vitals data",
+    )
+
+    pagespeed_api_key: str = Field(
+        default="",  # Empty default: PSI works unauthenticated at a low quota, a key raises the quota
+        description="Google PageSpeed Insights API key loaded from PAGESPEED_API_KEY in .env (optional)",
+    )
+
+    pagespeed_timeout_seconds: int = Field(
+        default=30,  # PSI runs a real Lighthouse audit server-side, so it is slower than a plain fetch
+        description="Timeout in seconds for the PageSpeed Insights API call",
     )
 
     # --- Sitemap Inventory / Crawl Sampling -----------------------------------

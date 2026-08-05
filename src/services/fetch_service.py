@@ -92,6 +92,16 @@ class FetchedResource:
     used_playwright_fallback: bool = False
     # True when the httpx result looked like a JS shell and Playwright re-rendered it
 
+    used_wayback_fallback: bool = False
+    # True when the live fetch failed and this content came from an archive.org snapshot instead
+
+    archived_snapshot_timestamp: str = ""
+    # Wayback capture time (e.g. "20230101000000"), populated only when used_wayback_fallback is True
+
+    response_headers: dict[str, str] = field(default_factory=dict)
+    # Raw HTTP response headers (lower-cased names), e.g. security headers like
+    # Strict-Transport-Security or Content-Security-Policy; empty on failed/archived fetches
+
     redirect_chain: list[str] = field(default_factory=list)
     # Intermediate URLs visited before final_url, in order; empty if no redirect occurred
 
@@ -183,9 +193,24 @@ async def fetch_site(normalized_url: str, settings: Settings) -> SiteFetchResult
         # Fetch homepage, robots.txt, and sitemap.xml concurrently
         # asyncio.gather sends all three requests at the same time instead of one-by-one
         homepage, robots_txt, sitemap_xml = await asyncio.gather(
-            _fetch_resource(client, normalized_url, "homepage", settings.fetch_timeout_seconds),
-            _fetch_resource(client, robots_url, "robots.txt", settings.fetch_timeout_seconds),
-            _fetch_resource(client, sitemap_url, "sitemap.xml", settings.fetch_timeout_seconds),
+            _fetch_with_wayback_fallback(
+                client, normalized_url, "homepage", settings.fetch_timeout_seconds,
+                retry_attempts=settings.fetch_retry_attempts,
+                backoff_base_seconds=settings.fetch_retry_backoff_base_seconds,
+                wayback_enabled=settings.wayback_fallback_enabled,
+            ),
+            _fetch_with_wayback_fallback(
+                client, robots_url, "robots.txt", settings.fetch_timeout_seconds,
+                retry_attempts=settings.fetch_retry_attempts,
+                backoff_base_seconds=settings.fetch_retry_backoff_base_seconds,
+                wayback_enabled=settings.wayback_fallback_enabled,
+            ),
+            _fetch_with_wayback_fallback(
+                client, sitemap_url, "sitemap.xml", settings.fetch_timeout_seconds,
+                retry_attempts=settings.fetch_retry_attempts,
+                backoff_base_seconds=settings.fetch_retry_backoff_base_seconds,
+                wayback_enabled=settings.wayback_fallback_enabled,
+            ),
         )
 
         # Discover extra sitemaps referenced in robots.txt
@@ -202,11 +227,14 @@ async def fetch_site(normalized_url: str, settings: Settings) -> SiteFetchResult
                     continue  # Skip /sitemap.xml if it is already being fetched above
 
                 logger.debug("Fetching extra sitemap from robots.txt: %s", smap_url)
-                extra = await _fetch_resource(
+                extra = await _fetch_with_wayback_fallback(
                     client,
                     smap_url,
                     f"sitemap:{smap_url}",  # Label includes the URL to identify it in the report
                     settings.fetch_timeout_seconds,
+                    retry_attempts=settings.fetch_retry_attempts,
+                    backoff_base_seconds=settings.fetch_retry_backoff_base_seconds,
+                    wayback_enabled=settings.wayback_fallback_enabled,
                 )
                 extra_sitemaps.append(extra)  # Add to the list regardless of success
 
@@ -233,29 +261,73 @@ async def fetch_site(normalized_url: str, settings: Settings) -> SiteFetchResult
 # Private helpers
 # ---------------------------------------------------------------------------
 
+# Status codes worth retrying — the server itself signalled a transient problem
+_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+
+def _is_transient_failure(resource: FetchedResource) -> bool:
+    """True when a retry might succeed: 429/5xx responses, timeouts, or connection errors."""
+    if resource.status_code in _TRANSIENT_STATUS_CODES:
+        return True
+    # status_code stays 0 when no HTTP response was received at all (timeout/DNS/connection
+    # error) — except redirect-limit failures, which will fail identically on every retry
+    return resource.status_code == 0 and "redirect" not in resource.error_message.lower()
+
+
 async def _fetch_resource(
     client: httpx.AsyncClient,
     url: str,
     label: str,
     timeout: int,
+    retry_attempts: int = 1,
+    backoff_base_seconds: float = 0.5,
 ) -> FetchedResource:
     """
-    Fetch a single URL and return a FetchedResource.
+    Fetch a single URL, retrying transient failures, and return a FetchedResource.
 
     Never raises an exception — all failures are captured and returned
     as a FetchedResource with is_success=False and an error_message.
     This ensures fetch failures are treated as audit evidence rather than
     application errors.
 
+    A real 403/404 is returned immediately on the first attempt since retrying
+    would not change the outcome; only timeouts, connection errors, and 429/5xx
+    responses are retried, with exponential backoff between attempts.
+
     Args:
         client: An open httpx.AsyncClient to use for the request.
         url: The URL to fetch.
         label: Human-readable label for logging and report context.
         timeout: Maximum seconds to wait for the response.
+        retry_attempts: Maximum attempts before giving up (default 1 = no retry).
+        backoff_base_seconds: Base delay for exponential backoff between attempts.
 
     Returns:
         FetchedResource with populated fields; is_success=False on any failure.
     """
+    result: FetchedResource = await _attempt_fetch(client, url, label, timeout)
+
+    attempt = 1
+    while attempt < retry_attempts and _is_transient_failure(result):
+        delay = backoff_base_seconds * (2 ** (attempt - 1))
+        logger.warning(
+            "Transient failure fetching %s (attempt %d/%d), retrying in %.1fs: %s",
+            url, attempt, retry_attempts, delay, result.error_message or result.status_code,
+        )
+        await asyncio.sleep(delay)
+        result = await _attempt_fetch(client, url, label, timeout)
+        attempt += 1
+
+    return result
+
+
+async def _attempt_fetch(
+    client: httpx.AsyncClient,
+    url: str,
+    label: str,
+    timeout: int,
+) -> FetchedResource:
+    """Make one HTTP attempt at url, capturing any failure as a FetchedResource."""
     logger.debug("Fetching %s: %s", label, url)  # Log every individual fetch attempt
 
     try:
@@ -285,6 +357,7 @@ async def _fetch_resource(
             content=content,
             is_success=response.is_success,  # httpx.is_success is True for 2xx status codes
             is_fetched=True,
+            response_headers={k.lower(): v for k, v in response.headers.items()},
         )
 
     except httpx.TimeoutException:
@@ -323,6 +396,90 @@ async def _fetch_resource(
             is_success=False,
             error_message=f"Could not connect to the server: {error_text}",
         )
+
+
+# Free, no-auth availability API — tells us the most recent archived snapshot of a URL, if any
+_WAYBACK_AVAILABILITY_URL: str = "https://archive.org/wayback/available"
+
+
+async def _fetch_with_wayback_fallback(
+    client: httpx.AsyncClient,
+    url: str,
+    label: str,
+    timeout: int,
+    retry_attempts: int = 1,
+    backoff_base_seconds: float = 0.5,
+    wayback_enabled: bool = True,
+) -> FetchedResource:
+    """
+    Fetch url (with retries), falling back to an archive.org snapshot on failure.
+
+    A live failure (blocked, offline, transient error exhausted its retries)
+    would otherwise leave this evidence permanently empty. Falling back to a
+    real, citable archived copy keeps the evidence honest — nothing is
+    invented, and the report can disclose that the data came from an
+    archived snapshot rather than a live fetch.
+
+    Returns:
+        The live FetchedResource on success; the archived snapshot's
+        FetchedResource if the live fetch failed and a snapshot exists;
+        otherwise the original failed FetchedResource unchanged.
+    """
+    result: FetchedResource = await _fetch_resource(
+        client, url, label, timeout, retry_attempts, backoff_base_seconds,
+    )
+
+    if result.is_success or not wayback_enabled:
+        return result
+
+    logger.info("Live fetch failed for %s (%s); checking archive.org for a snapshot", label, url)
+    archived: FetchedResource | None = await _fetch_wayback_snapshot(client, url, label, timeout)
+
+    if archived is None:
+        return result  # No archived snapshot available — keep the original failure as evidence
+
+    logger.info(
+        "Using archive.org snapshot from %s for %s (%s)",
+        archived.archived_snapshot_timestamp, label, url,
+    )
+    return archived
+
+
+async def _fetch_wayback_snapshot(
+    client: httpx.AsyncClient,
+    url: str,
+    label: str,
+    timeout: int,
+) -> FetchedResource | None:
+    """
+    Look up and fetch the most recent archive.org snapshot of url, if one exists.
+
+    Returns None (never raises) when no snapshot exists or the lookup/fetch
+    itself fails — the caller then keeps the original live-fetch failure.
+    """
+    try:
+        availability: httpx.Response = await client.get(
+            _WAYBACK_AVAILABILITY_URL,
+            params={"url": url},
+            timeout=httpx.Timeout(timeout),
+        )
+        snapshot: dict = availability.json().get("archived_snapshots", {}).get("closest") or {}
+    except Exception as exc:
+        logger.warning("Wayback availability lookup failed for %s: %s", url, exc)
+        return None
+
+    snapshot_url: str = snapshot.get("url", "")
+    if not snapshot.get("available") or not snapshot_url:
+        return None
+
+    archived: FetchedResource = await _attempt_fetch(client, snapshot_url, label, timeout)
+    if not archived.is_success:
+        return None
+
+    archived.url = url  # Preserve the originally-requested URL for downstream matching
+    archived.used_wayback_fallback = True
+    archived.archived_snapshot_timestamp = snapshot.get("timestamp", "")
+    return archived
 
 
 def _extract_sitemaps_from_robots(robots_content: str) -> list[str]:

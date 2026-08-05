@@ -14,12 +14,14 @@ opinion can influence the score - this keeps an audit's score
 reproducible for an unchanged website (SCORING_ENGINE.md Principle 1:
 Consistency).
 
-Performance (10% weight) has no MVP-measurable checks yet - no
-Lighthouse/Core Web Vitals data is collected - so it always scores 100
-in this version rather than penalizing sites for missing evidence
-(SCORING_ENGINE.md Principle 5: Fairness). This is a documented MVP
-limitation, not an oversight, and should be revisited once real
-performance metrics are collected.
+Performance (10% weight) is scored from real Core Web Vitals data collected
+from Google PageSpeed Insights (src/services/pagespeed_service.py) when
+available. If PSI data could not be collected for a site, the category
+scores 100 rather than penalizing sites for missing evidence
+(SCORING_ENGINE.md Principle 5: Fairness). Only LCP/CLS/INP are checked
+since those are the only Performance metrics with real measured data;
+Page Size/Caching/Compression/Render-Blocking Resources remain unmeasured
+in this MVP and are not scored.
 
 Public interface:
     analyze_site(evidence: SiteEvidence) -> ScoreBreakdown
@@ -69,6 +71,14 @@ _THIN_CONTENT_WORD_COUNT = 300
 _MAX_EVIDENCE_URLS = 10
 # Caps evidence_urls per finding so large sites don't bloat the report
 
+# Core Web Vitals thresholds per Google's published guidance (web.dev/articles/cwv)
+_LCP_POOR_MS = 4000.0
+_LCP_NEEDS_IMPROVEMENT_MS = 2500.0
+_CLS_POOR = 0.25
+_CLS_NEEDS_IMPROVEMENT = 0.1
+_INP_POOR_MS = 500.0
+_INP_NEEDS_IMPROVEMENT_MS = 200.0
+
 
 # ---------------------------------------------------------------------------
 # Public interface
@@ -86,6 +96,7 @@ def analyze_site(evidence: SiteEvidence) -> ScoreBreakdown:
         *_check_technical_seo(evidence, pages),
         *_check_on_page_seo(pages),
         *_check_content_quality(pages),
+        *_check_performance(evidence),
         *_check_accessibility(pages),
         *_check_security(evidence),
     ]
@@ -381,6 +392,101 @@ def _check_content_quality(pages: list[PageEvidence]) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Performance checks (10%)
+# ---------------------------------------------------------------------------
+
+
+def _check_performance(evidence: SiteEvidence) -> list[Finding]:
+    performance = evidence.performance
+    if performance is None or not performance.is_available:
+        return []  # No real PageSpeed Insights data collected - never penalize for missing evidence
+
+    findings: list[Finding] = []
+    homepage_url = evidence.homepage.url
+    source = performance.data_source
+
+    lcp = performance.largest_contentful_paint_ms
+    if lcp is not None and lcp > _LCP_POOR_MS:
+        findings.append(Finding(
+            category=_CATEGORY_PERFORMANCE,
+            title="Largest Contentful Paint (LCP) is poor",
+            severity=Severity.HIGH,
+            description=f"LCP measured {lcp / 1000:.1f}s, above the 4.0s 'poor' threshold ({source} data).",
+            business_impact="Slow-loading main content frustrates visitors and is a confirmed Google ranking signal; poor LCP correlates with higher bounce rates.",
+            recommendation="Optimize the largest above-the-fold element: compress/resize hero images, preload critical resources, and reduce server response time.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage_url],
+            score_deduction=35.0,
+        ))
+    elif lcp is not None and lcp > _LCP_NEEDS_IMPROVEMENT_MS:
+        findings.append(Finding(
+            category=_CATEGORY_PERFORMANCE,
+            title="Largest Contentful Paint (LCP) needs improvement",
+            severity=Severity.MEDIUM,
+            description=f"LCP measured {lcp / 1000:.1f}s, between the 2.5s 'good' and 4.0s 'poor' thresholds ({source} data).",
+            business_impact="Borderline load times can still cost conversions on slower connections or devices.",
+            recommendation="Optimize the largest above-the-fold element: compress/resize hero images and reduce render-blocking resources.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage_url],
+            score_deduction=15.0,
+        ))
+
+    cls = performance.cumulative_layout_shift
+    if cls is not None and cls > _CLS_POOR:
+        findings.append(Finding(
+            category=_CATEGORY_PERFORMANCE,
+            title="Cumulative Layout Shift (CLS) is poor",
+            severity=Severity.HIGH,
+            description=f"CLS measured {cls:.2f}, above the 0.25 'poor' threshold ({source} data).",
+            business_impact="Visible layout shifts cause mis-clicks and a jarring experience, directly hurting Google's page experience signals.",
+            recommendation="Reserve space for images/ads/embeds with explicit width and height, and avoid injecting content above existing content.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage_url],
+            score_deduction=30.0,
+        ))
+    elif cls is not None and cls > _CLS_NEEDS_IMPROVEMENT:
+        findings.append(Finding(
+            category=_CATEGORY_PERFORMANCE,
+            title="Cumulative Layout Shift (CLS) needs improvement",
+            severity=Severity.MEDIUM,
+            description=f"CLS measured {cls:.2f}, between the 0.1 'good' and 0.25 'poor' thresholds ({source} data).",
+            business_impact="Noticeable layout shifts can still degrade the perceived quality of the page.",
+            recommendation="Reserve space for images/ads/embeds with explicit width and height attributes.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage_url],
+            score_deduction=12.0,
+        ))
+
+    inp = performance.interaction_to_next_paint_ms
+    if inp is not None and inp > _INP_POOR_MS:
+        findings.append(Finding(
+            category=_CATEGORY_PERFORMANCE,
+            title="Interaction to Next Paint (INP) is poor",
+            severity=Severity.HIGH,
+            description=f"INP measured {inp:.0f}ms, above the 500ms 'poor' threshold ({source} data).",
+            business_impact="Sluggish response to clicks/taps frustrates visitors and is a Core Web Vital used in Google's page experience ranking signal.",
+            recommendation="Break up long JavaScript tasks, defer non-critical scripts, and minimize main-thread work triggered by user interactions.",
+            effort=EffortLevel.HIGH,
+            evidence_urls=[homepage_url],
+            score_deduction=25.0,
+        ))
+    elif inp is not None and inp > _INP_NEEDS_IMPROVEMENT_MS:
+        findings.append(Finding(
+            category=_CATEGORY_PERFORMANCE,
+            title="Interaction to Next Paint (INP) needs improvement",
+            severity=Severity.MEDIUM,
+            description=f"INP measured {inp:.0f}ms, between the 200ms 'good' and 500ms 'poor' thresholds ({source} data).",
+            business_impact="Slightly delayed responsiveness can still be noticeable to visitors on interactive pages.",
+            recommendation="Break up long JavaScript tasks and defer non-critical scripts to improve interaction responsiveness.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage_url],
+            score_deduction=10.0,
+        ))
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Accessibility checks (5%)
 # ---------------------------------------------------------------------------
 
@@ -430,17 +536,76 @@ def _check_accessibility(pages: list[PageEvidence]) -> list[Finding]:
 
 
 def _check_security(evidence: SiteEvidence) -> list[Finding]:
-    if evidence.homepage.is_https:
-        return []
+    findings: list[Finding] = []
+    homepage = evidence.homepage
 
-    return [Finding(
-        category=_CATEGORY_SECURITY,
-        title="Site is not served over HTTPS",
-        severity=Severity.CRITICAL,
-        description="The homepage was reached over an insecure http:// connection.",
-        business_impact="Unencrypted traffic can be intercepted or modified, and browsers actively warn visitors that the site is 'Not Secure'.",
-        recommendation="Install an SSL/TLS certificate and enforce HTTPS site-wide.",
-        effort=EffortLevel.MEDIUM,
-        evidence_urls=[evidence.homepage.url],
-        score_deduction=100.0,
-    )]
+    if not homepage.is_https:
+        findings.append(Finding(
+            category=_CATEGORY_SECURITY,
+            title="Site is not served over HTTPS",
+            severity=Severity.CRITICAL,
+            description="The homepage was reached over an insecure http:// connection.",
+            business_impact="Unencrypted traffic can be intercepted or modified, and browsers actively warn visitors that the site is 'Not Secure'.",
+            recommendation="Install an SSL/TLS certificate and enforce HTTPS site-wide.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage.url],
+            score_deduction=100.0,
+        ))
+
+    headers = evidence.security_headers
+    if headers is None:
+        return findings  # No response headers were captured for the homepage - nothing further to check
+
+    if homepage.is_https and not headers.has_hsts:
+        findings.append(Finding(
+            category=_CATEGORY_SECURITY,
+            title="Missing Strict-Transport-Security (HSTS) header",
+            severity=Severity.MEDIUM,
+            description="The homepage response did not include a Strict-Transport-Security header.",
+            business_impact="Without HSTS, browsers may still attempt an insecure http:// connection first, leaving an opening for downgrade or man-in-the-middle attacks.",
+            recommendation="Add a Strict-Transport-Security header (e.g. 'max-age=31536000; includeSubDomains') to all HTTPS responses.",
+            effort=EffortLevel.LOW,
+            evidence_urls=[homepage.url],
+            score_deduction=15.0,
+        ))
+
+    if not headers.has_content_security_policy:
+        findings.append(Finding(
+            category=_CATEGORY_SECURITY,
+            title="Missing Content-Security-Policy header",
+            severity=Severity.MEDIUM,
+            description="The homepage response did not include a Content-Security-Policy header.",
+            business_impact="Without a CSP, the site has no browser-enforced defense against injected scripts if an XSS vulnerability is ever introduced.",
+            recommendation="Define a Content-Security-Policy header that restricts script, style, and frame sources to trusted origins.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=[homepage.url],
+            score_deduction=10.0,
+        ))
+
+    if not headers.has_x_content_type_options:
+        findings.append(Finding(
+            category=_CATEGORY_SECURITY,
+            title="Missing X-Content-Type-Options header",
+            severity=Severity.LOW,
+            description="The homepage response did not include an X-Content-Type-Options header.",
+            business_impact="Without 'nosniff', some browsers may MIME-sniff responses and execute content in unexpected ways.",
+            recommendation="Add an 'X-Content-Type-Options: nosniff' header to all responses.",
+            effort=EffortLevel.LOW,
+            evidence_urls=[homepage.url],
+            score_deduction=8.0,
+        ))
+
+    if not headers.has_x_frame_options:
+        findings.append(Finding(
+            category=_CATEGORY_SECURITY,
+            title="Missing X-Frame-Options header",
+            severity=Severity.MEDIUM,
+            description="The homepage response did not include an X-Frame-Options header.",
+            business_impact="Without clickjacking protection, the site could be embedded in a malicious iframe to trick visitors into unintended actions.",
+            recommendation="Add an 'X-Frame-Options: DENY' or 'SAMEORIGIN' header (or an equivalent CSP frame-ancestors directive).",
+            effort=EffortLevel.LOW,
+            evidence_urls=[homepage.url],
+            score_deduction=12.0,
+        ))
+
+    return findings

@@ -77,6 +77,7 @@ from src.services.analysis_service import analyze_site  # Deterministic evidence
 from src.services.audit_models import (
     AuditContext,
     Finding,
+    PerformanceEvidence,
     ResearchBundle,
     ResearchClaim,
     ScoreBreakdown,
@@ -96,22 +97,22 @@ logger = logging.getLogger(__name__)  # Resolves to "src.services.report_service
 
 def _extract_required_part_headings(master_report_structure: str) -> tuple[str, ...]:
     """
-    Derive required PART headings from the live template content.
+    Derive required PART/SECTION headings from the live template content.
 
     Reads the headings that are actually present in MASTER_REPORT_STRUCTURE.md
     so the validator always reflects the current template, regardless of how
-    many parts the file contains.
+    many parts/sections the file contains.
     """
     return tuple(
         m.group(0)
-        for m in re.finditer(r"^# PART \d+:", master_report_structure, re.MULTILINE)
+        for m in re.finditer(r"^# (?:PART|SECTION) \d+:", master_report_structure, re.MULTILINE)
     )
 
 
 # Phrases that must never leak into a client-facing report — see the
 # "Originality & Source Integrity" rules in seo_audit.prompt.md.
 #
-# NOTE: "perplexity"/"chatgpt"/"gemini" are NOT banned as bare words — PART 9.2
+# NOTE: "perplexity"/"chatgpt"/"gemini" are NOT banned as bare words — SECTION 5.2
 # (AI Search / GEO Visibility) legitimately discusses these platforms as SEO
 # targets. Only self-attribution phrasing (the model naming itself as the
 # report's author/tool) is contamination and gets flagged.
@@ -168,7 +169,7 @@ def _extract_section_body(markdown_report: str, heading_prefix: str) -> str | No
 
 def _replace_source_register_table(section_markdown: str, source_register: str) -> str:
     """
-    Overwrite PART 11.3's "### Source Register Table" body with the
+    Overwrite SECTION 8.3's "### Source Register Table" body with the
     deterministically built source_register, discarding whatever table the
     LLM wrote there (which cannot be trusted to reproduce citations exactly).
 
@@ -185,26 +186,26 @@ def _replace_source_register_table(section_markdown: str, source_register: str) 
 
 def _validate_location_section(markdown_report: str) -> list[str]:
     """
-    Enforce PART 7's conditional rule: exactly one of 7.2 or 7.3 must be
+    Enforce SECTION 3's conditional rule: exactly one of 3.2 or 3.3 must be
     completed, with the other explicitly marked not applicable.
 
     Returns a list of human-readable issue descriptions (empty if the
-    section is well-formed or PART 7 is absent from this template).
+    section is well-formed or SECTION 3 is absent from this template).
     """
-    section_72: str | None = _extract_section_body(markdown_report, "## 7.2")
-    section_73: str | None = _extract_section_body(markdown_report, "## 7.3")
+    section_32: str | None = _extract_section_body(markdown_report, "## 3.2")
+    section_33: str | None = _extract_section_body(markdown_report, "## 3.3")
 
-    if section_72 is None or section_73 is None:
+    if section_32 is None or section_33 is None:
         # Missing headings are already reported by the required-heading check.
         return []
 
-    is_72_not_applicable: bool = "not applicable" in section_72.lower()
-    is_73_not_applicable: bool = "not applicable" in section_73.lower()
+    is_32_not_applicable: bool = "not applicable" in section_32.lower()
+    is_33_not_applicable: bool = "not applicable" in section_33.lower()
 
-    if is_72_not_applicable and is_73_not_applicable:
-        return ["PART 7 sections 7.2 and 7.3 are both marked not applicable — exactly one must be completed"]
-    if not is_72_not_applicable and not is_73_not_applicable:
-        return ["PART 7 sections 7.2 and 7.3 are both completed — exactly one must be marked not applicable"]
+    if is_32_not_applicable and is_33_not_applicable:
+        return ["SECTION 3 sections 3.2 and 3.3 are both marked not applicable — exactly one must be completed"]
+    if not is_32_not_applicable and not is_33_not_applicable:
+        return ["SECTION 3 sections 3.2 and 3.3 are both completed — exactly one must be marked not applicable"]
     return []
 
 
@@ -239,8 +240,8 @@ def _deduplicate_table_rows(markdown_report: str) -> str:
     """
     Drop repeated recommendation rows from every Markdown table in the report.
 
-    Recommendation-style tables (e.g. PART 3.1's Issues Table, PART 4's
-    on-page tables, and PART 10.1's 30/60/90-Day Action Plan) can restate the
+    Recommendation-style tables (e.g. PART 2.1's Issues Table, PART 3's
+    on-page tables, and SECTION 6.1's 30/60/90-Day Action Plan) can restate the
     same recommendation under a different timeframe/page across independent
     section-generation calls. When a table has an "Action"/"Recommendation"/
     "Recommended" column, rows are deduplicated on that column's value alone
@@ -390,19 +391,21 @@ async def build_audit_context(
 # ---------------------------------------------------------------------------
 # Section groups and section-scoped evidence formatting — Phase 4 pipeline
 # ---------------------------------------------------------------------------
-# Fixed, deterministic grouping of MASTER_REPORT_STRUCTURE.md PART headings
-# into section-generation calls, so no single call has to hold the entire
-# site's evidence in context. The executive summary is generated last, from
-# the score/findings/research already assembled for every other group.
+# Fixed, deterministic grouping of MASTER_REPORT_STRUCTURE.md PART/SECTION
+# headings into section-generation calls, so no single call has to hold the
+# entire site's evidence in context. The executive summary is generated last,
+# from the score/findings/research already assembled for every other group,
+# but assemble_report_markdown() splices it back in as SECTION 7 — immediately
+# before SECTION 8 (Methodology) — rather than appending it at generation order.
 
 _SECTION_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("site_inventory", ("PART 2",)),
-    ("technical_and_onpage", ("PART 3", "PART 4")),
-    ("keyword_strategy", ("PART 5",)),
-    ("competitor_analysis", ("PART 6",)),
-    ("location_or_market_expansion", ("PART 7",)),
-    ("structured_data_and_execution", ("PART 8", "PART 9", "PART 10", "PART 11")),
-    ("executive_summary", ("PART 1",)),
+    ("site_inventory", ("PART 1",)),
+    ("technical_and_onpage", ("PART 2", "PART 3")),
+    ("keyword_strategy", ("SECTION 1",)),
+    ("competitor_analysis", ("SECTION 2",)),
+    ("location_or_market_expansion", ("SECTION 3",)),
+    ("structured_data_and_execution", ("SECTION 4", "SECTION 5", "SECTION 6", "SECTION 8")),
+    ("executive_summary", ("SECTION 7",)),
 )
 
 
@@ -439,8 +442,25 @@ def _format_claims(claims: list[ResearchClaim], empty_message: str) -> str:
     return "\n".join(lines)
 
 
+def _format_performance_evidence(performance: PerformanceEvidence | None) -> str:
+    """Render raw Core Web Vitals / PageSpeed evidence for section 2.4, or an honest not-collected message."""
+    if performance is None or not performance.is_available:
+        return "No Core Web Vitals / PageSpeed data was collected for this audit."
+
+    lines = [f"PageSpeed Insights data collected ({performance.data_source} data, source: {performance.source_url}):"]
+    if performance.performance_score is not None:
+        lines.append(f"- Performance score: {performance.performance_score:.0f}/100")
+    if performance.largest_contentful_paint_ms is not None:
+        lines.append(f"- Largest Contentful Paint (LCP): {performance.largest_contentful_paint_ms / 1000:.1f}s")
+    if performance.cumulative_layout_shift is not None:
+        lines.append(f"- Cumulative Layout Shift (CLS): {performance.cumulative_layout_shift:.2f}")
+    if performance.interaction_to_next_paint_ms is not None:
+        lines.append(f"- Interaction to Next Paint (INP): {performance.interaction_to_next_paint_ms:.0f}ms")
+    return "\n".join(lines)
+
+
 def _format_site_inventory_evidence(site_evidence: SiteEvidence) -> str:
-    """Compact evidence slice for PART 2 (full website audit / URL inventory)."""
+    """Compact evidence slice for PART 1 (full website audit / URL inventory)."""
     inventory = site_evidence.inventory
     total_urls = inventory.total_url_count if inventory else 0
     sampled_pages = [site_evidence.homepage, *site_evidence.sampled_pages]
@@ -481,7 +501,17 @@ def _format_section_evidence(group_name: str, context: AuditContext) -> str:
             [f for f in findings if f.category in ("On-Page SEO", "Content Quality")],
             "No On-Page or Content Quality findings were recorded in this audit.",
         )
-        return f"Technical SEO findings:\n{technical}\n\nOn-Page & Content findings:\n{onpage}"
+        performance_evidence = _format_performance_evidence(context.site_evidence.performance)
+        performance_findings = _format_findings(
+            [f for f in findings if f.category == "Performance"],
+            "No Performance findings were recorded in this audit.",
+        )
+        return (
+            f"Technical SEO findings:\n{technical}\n\n"
+            f"On-Page & Content findings:\n{onpage}\n\n"
+            f"Core Web Vitals / Performance evidence (section 2.4):\n{performance_evidence}\n\n"
+            f"Performance findings:\n{performance_findings}"
+        )
 
     if group_name == "keyword_strategy":
         return _format_claims(
@@ -517,14 +547,22 @@ def _format_section_evidence(group_name: str, context: AuditContext) -> str:
 
     if group_name == "structured_data_and_execution":
         remaining = _format_findings(
-            [f for f in findings if f.category in ("Accessibility", "Security", "Performance")],
-            "No Accessibility, Security, or Performance findings were recorded in this audit.",
+            [f for f in findings if f.category in ("Accessibility", "Security")],
+            "No Accessibility or Security findings were recorded in this audit.",
         )
         authority = _format_claims(
             context.research.authority_opportunities,
             "No off-page/authority opportunities were found with a citable source.",
         )
-        return f"Remaining deterministic findings:\n{remaining}\n\nOff-page/authority opportunities:\n{authority}"
+        brand_presence = _format_claims(
+            context.research.brand_presence,
+            "No existing brand presence signals were found with a citable source.",
+        )
+        return (
+            f"Remaining deterministic findings:\n{remaining}\n\n"
+            f"Off-page/authority opportunities:\n{authority}\n\n"
+            f"Existing brand presence (SEO_RULES Section 5):\n{brand_presence}"
+        )
 
     if group_name == "executive_summary":
         category_lines = "\n".join(
@@ -544,16 +582,17 @@ def _format_section_evidence(group_name: str, context: AuditContext) -> str:
 
 def _extract_part_templates(master_report_structure: str, part_headings: tuple[str, ...]) -> str:
     """
-    Extract only the named "# PART N:" template blocks (heading through the
-    next top-level PART heading or end of file), in the given order.
+    Extract only the named "# PART N:"/"# SECTION N:" template blocks (heading
+    through the next top-level PART/SECTION heading or end of file), in the
+    given order.
 
-    Keeps one section-generation call's template input limited to the PARTs
-    it is actually responsible for, instead of the entire 11-PART template.
+    Keeps one section-generation call's template input limited to the
+    parts/sections it is actually responsible for, instead of the entire template.
     """
     blocks: list[str] = []
     for heading_prefix in part_headings:
         pattern = re.compile(
-            rf"^(# {re.escape(heading_prefix)}:[^\n]*\n[\s\S]*?)(?=^# PART \d+:|\Z)",
+            rf"^(# {re.escape(heading_prefix)}:[^\n]*\n[\s\S]*?)(?=^# (?:PART|SECTION) \d+:|\Z)",
             re.MULTILINE,
         )
         match = pattern.search(master_report_structure)
@@ -605,7 +644,7 @@ async def generate_report_sections(
     """
     Generate each section group's Markdown independently.
 
-    Each group is validated (required headings, banned phrases, PART 7's
+    Each group is validated (required headings, banned phrases, SECTION 3's
     conditional rule, and Source/Retrieved citation columns) and retried at
     most once on failure. A group is stored in the returned dict as soon as
     it succeeds (or exhausts its retry) — one section's failure never
@@ -676,35 +715,40 @@ async def generate_report_sections(
     return sections
 
 
-def _first_part_number(group_name: str) -> int:
-    """The lowest PART number owned by a section group, e.g. 3 for technical_and_onpage (PART 3, PART 4)."""
-    part_headings: tuple[str, ...] = next(headings for name, headings in _SECTION_GROUPS if name == group_name)
-    return min(int(heading.split(" ")[1]) for heading in part_headings)
-
-
 def assemble_report_markdown(sections: dict[str, str]) -> str:
     """
     Combine generate_report_sections()'s per-group Markdown into one final report.
 
-    Groups are ordered by the lowest PART number they own (template order),
-    not generation order — so the executive summary (PART 1) leads the
-    document even though it is generated last, from the other groups'
-    already-known findings and research.
+    Every group except the executive summary is joined in _SECTION_GROUPS'
+    declaration order, which is already the report's final read order. The
+    executive summary is generated last, from every other group's completed
+    findings, but must still read as SECTION 7 — immediately before SECTION 8
+    (Methodology) — so it is spliced in at that heading rather than appended
+    at generation order.
 
     Args:
         sections: The dict returned by generate_report_sections().
 
     Returns:
-        The assembled Markdown report, sections in PART 1-11 order.
+        The assembled Markdown report, in the template's PART/SECTION order.
     """
-    ordered_group_names: list[str] = sorted(sections.keys(), key=_first_part_number)
-    return "\n\n".join(sections[group_name] for group_name in ordered_group_names)
+    body_group_names: list[str] = [name for name, _ in _SECTION_GROUPS if name != "executive_summary"]
+    body: str = "\n\n".join(sections[name] for name in body_group_names if name in sections)
+
+    executive_summary: str = sections.get("executive_summary", "")
+    if not executive_summary:
+        return body
+
+    methodology_heading_index: int = body.find("# SECTION 8:")
+    if methodology_heading_index == -1:
+        return f"{body}\n\n{executive_summary}"
+    return f"{body[:methodology_heading_index]}{executive_summary}\n\n{body[methodology_heading_index:]}"
 
 
 def build_source_register(context: AuditContext) -> str:
     """
     Deterministically compile every unique externally researched claim's
-    provenance into PART 11.3's Source Register Table.
+    provenance into SECTION 8.3's Source Register Table.
 
     Built directly from context.research rather than trusting the LLM to
     faithfully reproduce citations it already saw in each section's
@@ -715,7 +759,7 @@ def build_source_register(context: AuditContext) -> str:
         context: The AuditContext whose research bundle is being cited.
 
     Returns:
-        A Markdown table matching MASTER_REPORT_STRUCTURE.md's PART 11.3
+        A Markdown table matching MASTER_REPORT_STRUCTURE.md's SECTION 8.3
         format ("| # | Claim | Source URL | Retrieved |"), or a plain
         statement if no external research claims were used in this audit.
     """
@@ -859,29 +903,39 @@ def _validate_score_consistency(markdown_report: str, context: AuditContext) -> 
     return issues
 
 
-# Metrics this MVP's crawler never measures — see analysis_service's "Lighthouse/
-# Core Web Vitals data is collected" note and AI_REPORT_GUIDELINES.md Section 8
-# ("Invent page speed scores", "Invent Core Web Vitals", "Invent keyword rankings",
-# "Invent backlinks"). A specific number for any of these can only be invented.
+# Metrics this MVP's crawler never measures at all — see AI_REPORT_GUIDELINES.md
+# Section 8 ("Invent keyword rankings", "Invent backlinks"). A specific number
+# for either of these can only be invented, regardless of what other evidence
+# was collected for this audit.
 _UNSUPPORTED_METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"\b(?:LCP|INP|CLS)\b\D{0,15}\d", "a specific Core Web Vitals value"),
-    (r"\b(?:pagespeed|lighthouse)\D{0,15}\d", "a specific PageSpeed/Lighthouse score"),
     (r"\brank(?:s|ed|ing)?\D{0,10}#?\d+\D{0,15}(?:for|on)\b", "a specific keyword ranking position"),
     (r"\b\d+\D{0,10}backlinks?\b", "a specific backlink count"),
 )
 
+# Core Web Vitals / PageSpeed metrics — only unsupported when this audit's
+# PerformanceEvidence (src/services/pagespeed_service.py) was unavailable. When
+# real data was collected, the report is expected to cite it, so these patterns
+# are skipped (see _validate_no_unsupported_metric_claims).
+_UNSUPPORTED_PERFORMANCE_METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\b(?:LCP|INP|CLS)\b\D{0,15}\d", "a specific Core Web Vitals value"),
+    (r"\b(?:pagespeed|lighthouse)\D{0,15}\d", "a specific PageSpeed/Lighthouse score"),
+)
 
-def _validate_no_unsupported_metric_claims(markdown_report: str) -> list[str]:
+
+def _validate_no_unsupported_metric_claims(markdown_report: str, performance_evidence_available: bool) -> list[str]:
     """
-    Flag report text stating a specific Core Web Vitals value, PageSpeed/
-    Lighthouse score, keyword ranking position, or backlink count.
-
-    None of these are measured by this MVP's crawler, so any such number
-    in the report was necessarily invented by the LLM rather than derived
-    from evidence.
+    Flag report text stating a specific keyword ranking position or backlink
+    count (never measured by this MVP), or a specific Core Web Vitals /
+    PageSpeed value when no real PerformanceEvidence was collected for this
+    audit — in that case the number was necessarily invented rather than
+    derived from evidence.
     """
     issues: list[str] = []
-    for pattern, description in _UNSUPPORTED_METRIC_PATTERNS:
+    patterns = _UNSUPPORTED_METRIC_PATTERNS
+    if not performance_evidence_available:
+        patterns += _UNSUPPORTED_PERFORMANCE_METRIC_PATTERNS
+
+    for pattern, description in patterns:
         if re.search(pattern, markdown_report, re.IGNORECASE):
             issues.append(f"Report appears to state {description}, which this audit does not measure")
     return issues
@@ -892,8 +946,10 @@ _EXECUTIVE_SUMMARY_MAX_WORDS = 400
 
 
 def _validate_executive_summary_length(markdown_report: str) -> list[str]:
-    """Enforce REPORT_SPECIFICATION.md's 400-word maximum for the Executive Summary (PART 1)."""
-    match = re.search(r"^# PART 1:[^\n]*\n([\s\S]*?)(?=^# PART \d+:|\Z)", markdown_report, re.MULTILINE)
+    """Enforce REPORT_SPECIFICATION.md's 400-word maximum for the Executive Summary (SECTION 7)."""
+    match = re.search(
+        r"^# SECTION 7:[^\n]*\n([\s\S]*?)(?=^# (?:PART|SECTION) \d+:|\Z)", markdown_report, re.MULTILINE,
+    )
     if match is None:
         return []
 
@@ -939,7 +995,9 @@ def validate_assembled_report(markdown_report: str, master_report_structure: str
     issues.extend(_validate_table_column_counts(markdown_report))
     issues.extend(_validate_url_provenance(markdown_report, context))
     issues.extend(_validate_score_consistency(markdown_report, context))
-    issues.extend(_validate_no_unsupported_metric_claims(markdown_report))
+    performance = context.site_evidence.performance
+    performance_evidence_available = performance is not None and performance.is_available
+    issues.extend(_validate_no_unsupported_metric_claims(markdown_report, performance_evidence_available))
     issues.extend(_validate_executive_summary_length(markdown_report))
 
     return issues
@@ -1159,16 +1217,16 @@ async def generate_report(
             ", ".join(banned_phrases),
         )
 
-    # Validate PART 7's conditional location/market-expansion rule.
+    # Validate SECTION 3's conditional location/market-expansion rule.
     location_issues: list[str] = _validate_location_section(markdown_report)
     if location_issues:
         logger.warning(
-            "Generated report for %s has PART 7 conditional issues: %s",
+            "Generated report for %s has SECTION 3 conditional issues: %s",
             normalized_url,
             "; ".join(location_issues),
         )
 
-    # Validate that every Source/Retrieved-cited table (PARTS 5-7) has no
+    # Validate that every Source/Retrieved-cited table (SECTION 1-3) has no
     # rows with an empty citation column.
     citation_issues: list[str] = _validate_citation_columns(markdown_report)
     if citation_issues:
@@ -1217,7 +1275,7 @@ async def generate_report(
                 )
             if location_issues:
                 logger.warning(
-                    "Retry report for %s still has PART 7 conditional issues: %s",
+                    "Retry report for %s still has SECTION 3 conditional issues: %s",
                     normalized_url,
                     "; ".join(location_issues),
                 )
@@ -1570,7 +1628,9 @@ def _build_user_message(
             "- Keep all headings, sub-headings, and table column names unchanged.\n"
             "- Do not add, remove, rename, or reorder sections.\n"
             "- Fill every section/table cell using verified evidence and URL-based analysis.\n"
-            "- Every SEO Notes cell must contain exactly three URL-specific improvement bullets separated by <br> — no bold labels, just the improvements.\n"
+            "- Every SEO Notes cell must contain exactly three URL-specific improvement bullets "
+            "formatted as an HTML <ul><li> list — no bold labels, just the improvements.\n"
+            "- Never use <br> to separate multiple points in a table cell — use <ul><li> bullets instead.\n"
             "- Never write 'Not Detected' or 'Could not be verified in this audit.' in any table cell.\n"
             "- Do not output any extra wrapper text before or after the report.\n\n"
             "## TEMPLATE TO FILL (VERBATIM STRUCTURE)\n\n"
@@ -1619,13 +1679,13 @@ def _build_retry_user_message(
 ) -> str:
     """
     Build a second-pass instruction that fixes missing headings, contamination,
-    PART 7 conditional-section violations, and/or missing citations.
+    SECTION 3 conditional-section violations, and/or missing citations.
 
     Args:
         original_user_message: The original report-generation user message.
         missing_parts: Required PART headings not found in the first output.
         banned_phrases: Contamination/branding phrases found in the first output.
-        location_issues: PART 7 conditional-section rule violations, if any.
+        location_issues: SECTION 3 conditional-section rule violations, if any.
         citation_issues: Source/Retrieved citation-column violations, if any.
 
     Returns:
@@ -1655,8 +1715,8 @@ def _build_retry_user_message(
     if location_issues:
         location_text: str = "\n".join(f"- {issue}" for issue in location_issues)
         instruction_blocks.append(
-            "Your previous output violated the PART 7 conditional-section rule.\n"
-            "Exactly one of section 7.2 (Local Location Opportunities) or 7.3 "
+            "Your previous output violated the SECTION 3 conditional-section rule.\n"
+            "Exactly one of section 3.2 (Local Location Opportunities) or 3.3 "
             "(Audience & Market Expansion Opportunities) must be completed, and the "
             "other must state it is not applicable.\n"
             f"{location_text}"

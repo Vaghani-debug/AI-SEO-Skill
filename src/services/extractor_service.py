@@ -31,6 +31,7 @@ from src.services.audit_models import (
     PageEvidence,  # Per-page evidence shape returned by build_page_evidence()
     PageType,  # Deterministic page classification assigned by crawl_service
     RobotsTxtEvidence,  # Robots.txt evidence shape
+    SecurityHeadersEvidence,  # HTTP security header evidence shape
     SitemapEvidence,  # Per-sitemap evidence shape
 )
 from src.services.fetch_service import FetchedResource, SiteFetchResult  # Input types from the fetch layer
@@ -541,6 +542,41 @@ def _extract_schema_types(soup: BeautifulSoup) -> list[str]:
                 types.extend(value for value in schema_type if isinstance(value, str))
 
     return sorted(set(types))  # Deduplicated, deterministic order
+
+
+# ---------------------------------------------------------------------------
+# Security headers
+# ---------------------------------------------------------------------------
+
+def build_security_headers_evidence(response_headers: dict[str, str]) -> SecurityHeadersEvidence:
+    """
+    Build SecurityHeadersEvidence from a homepage response's raw HTTP headers.
+
+    Args:
+        response_headers: FetchedResource.response_headers (lower-cased header names).
+
+    Returns:
+        SecurityHeadersEvidence reflecting exactly what the server sent — an
+        absent header means has_* is False and the *_value is None, never guessed.
+    """
+    hsts = response_headers.get("strict-transport-security")
+    csp = response_headers.get("content-security-policy")
+    xcto = response_headers.get("x-content-type-options")
+    xfo = response_headers.get("x-frame-options")
+    referrer_policy = response_headers.get("referrer-policy")
+
+    return SecurityHeadersEvidence(
+        has_hsts=hsts is not None,
+        hsts_value=hsts,
+        has_content_security_policy=csp is not None,
+        content_security_policy_value=csp,
+        has_x_content_type_options=xcto is not None,
+        x_content_type_options_value=xcto,
+        has_x_frame_options=xfo is not None,
+        x_frame_options_value=xfo,
+        has_referrer_policy=referrer_policy is not None,
+        referrer_policy_value=referrer_policy,
+    )
 
 
 # ---------------------------------------------------------------------------

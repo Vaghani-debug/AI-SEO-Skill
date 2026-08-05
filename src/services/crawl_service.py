@@ -31,7 +31,14 @@ from playwright.async_api import async_playwright
 
 from src.config import Settings
 from src.services.audit_models import PageEvidence, PageType, SiteEvidence, SitemapEntry, SiteInventory
-from src.services.extractor_service import AuditEvidence, RobotsTxtEvidence, build_page_evidence, extract
+from src.services.extractor_service import (
+    AuditEvidence,
+    RobotsTxtEvidence,
+    build_page_evidence,
+    build_security_headers_evidence,
+    extract,
+)
+from src.services.pagespeed_service import fetch_performance_evidence
 from src.services.fetch_service import FetchedResource, SiteFetchResult, fetch_site
 
 logger = logging.getLogger(__name__)
@@ -350,8 +357,9 @@ async def build_site_evidence(normalized_url: str, settings: Settings) -> SiteEv
     site: SiteFetchResult = await fetch_site(normalized_url, settings)
     homepage_audit_evidence: AuditEvidence = extract(site)
     inventory: SiteInventory = await build_site_inventory(site, settings)
-    sampled_resources: list[FetchedResource] = await crawl_sampled_pages(
-        inventory, homepage_audit_evidence.robots_txt, settings,
+    sampled_resources, performance = await asyncio.gather(
+        crawl_sampled_pages(inventory, homepage_audit_evidence.robots_txt, settings),
+        fetch_performance_evidence(homepage_audit_evidence.final_url, settings),
     )
 
     page_types_by_url: dict[str, PageType] = {entry.url: entry.page_type for entry in inventory.entries}
@@ -369,6 +377,8 @@ async def build_site_evidence(normalized_url: str, settings: Settings) -> SiteEv
         inventory=inventory,
         robots_txt=homepage_audit_evidence.robots_txt,
         sitemaps=homepage_audit_evidence.sitemaps,
+        security_headers=build_security_headers_evidence(site.homepage.response_headers),
+        performance=performance,
         unverifiable_fields=homepage_audit_evidence.unverifiable_fields,
     )
     logger.info(

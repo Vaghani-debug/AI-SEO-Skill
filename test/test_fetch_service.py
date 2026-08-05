@@ -19,6 +19,8 @@ from src.services.fetch_service import (
     SiteFetchResult,      # Result model for a full site fetch
     _extract_sitemaps_from_robots,  # Helper function: robots.txt sitemap extraction
     _fetch_resource,      # Internal fetch helper — tested directly to cover error paths
+    _fetch_wayback_snapshot,        # Internal helper: archive.org snapshot lookup/fetch
+    _fetch_with_wayback_fallback,   # Internal helper: retry + Wayback fallback wrapper
     fetch_site,           # Public orchestration function
 )
 from src.config import Settings  # Settings provides timeout and redirect configuration
@@ -41,6 +43,7 @@ def _make_mock_response(
     status_code: int = 200,
     text: str = "<html><title>Test</title></html>",
     url: str = "https://example.com",
+    headers: dict[str, str] | None = None,
 ) -> MagicMock:
     """
     Create a minimal mock httpx.Response object.
@@ -52,6 +55,7 @@ def _make_mock_response(
     response.text = text                       # Decoded body text
     response.url = httpx.URL(url)             # httpx.URL so str(response.url) works correctly
     response.is_success = 200 <= status_code < 300  # Mirror httpx's real is_success property
+    response.headers = headers or {}            # Plain dict — supports .items() like real httpx.Headers
     return response
 
 
@@ -182,6 +186,29 @@ class TestFetchResource:
         assert result.error_message == ""       # No error on success
         assert result.label == "homepage"       # Label preserved
 
+    async def test_response_headers_captured_lowercased(self) -> None:
+        """Real HTTP response headers are captured, with header names lower-cased."""
+        mock_response = _make_mock_response(
+            200, "<html>...</html>", "https://example.com",
+            headers={"Strict-Transport-Security": "max-age=31536000", "X-Frame-Options": "DENY"},
+        )
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=mock_response)
+
+        result = await _fetch_resource(client, "https://example.com", "homepage", 10)
+
+        assert result.response_headers["strict-transport-security"] == "max-age=31536000"
+        assert result.response_headers["x-frame-options"] == "DENY"
+
+    async def test_response_headers_empty_on_failure(self) -> None:
+        """A failed fetch (timeout) leaves response_headers empty rather than erroring."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
+
+        result = await _fetch_resource(client, "https://slow.example.com", "homepage", 5)
+
+        assert result.response_headers == {}
+
     async def test_404_response_recorded_not_raised(self) -> None:
         """A 404 is stored as a finding, not raised as an exception."""
         mock_response = _make_mock_response(404, "Not Found", "https://example.com/robots.txt")
@@ -233,6 +260,192 @@ class TestFetchResource:
 
         assert result.is_success is False
         assert "redirect" in result.error_message.lower()  # Message mentions redirects
+
+
+# ---------------------------------------------------------------------------
+# Tests for _fetch_resource() retry/backoff behaviour
+# ---------------------------------------------------------------------------
+
+class TestFetchResourceRetry:
+    """Unit tests for the retry-with-backoff wrapper around _fetch_resource()."""
+
+    async def test_retries_on_timeout_then_succeeds(self) -> None:
+        """A transient timeout on attempt 1 is retried and can still succeed."""
+        success = _make_mock_response(200, "<html>ok</html>", "https://example.com")
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=[httpx.TimeoutException("timed out"), success])
+
+        with patch("src.services.fetch_service.asyncio.sleep", AsyncMock()):
+            result = await _fetch_resource(
+                client, "https://example.com", "homepage", 5, retry_attempts=3,
+            )
+
+        assert result.is_success is True       # Second attempt succeeded
+        assert client.get.call_count == 2      # Exactly one retry was needed
+
+    async def test_retries_on_503_then_succeeds(self) -> None:
+        """A transient 503 response is retried and can still succeed."""
+        responses = [_make_mock_response(503, "Service Unavailable"), _make_mock_response(200, "<html>ok</html>")]
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=responses)
+
+        with patch("src.services.fetch_service.asyncio.sleep", AsyncMock()):
+            result = await _fetch_resource(
+                client, "https://example.com", "homepage", 5, retry_attempts=3,
+            )
+
+        assert result.is_success is True
+        assert client.get.call_count == 2
+
+    async def test_exhausts_retries_and_returns_last_failure(self) -> None:
+        """Repeated transient failures stop after retry_attempts and return the last failure."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
+
+        with patch("src.services.fetch_service.asyncio.sleep", AsyncMock()):
+            result = await _fetch_resource(
+                client, "https://slow.example.com", "homepage", 5, retry_attempts=3,
+            )
+
+        assert result.is_success is False
+        assert client.get.call_count == 3      # Attempted exactly retry_attempts times
+
+    async def test_no_retry_on_404(self) -> None:
+        """A real 404 is not retried since a retry cannot change the outcome."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=_make_mock_response(404, "Not Found"))
+
+        result = await _fetch_resource(
+            client, "https://example.com/robots.txt", "robots.txt", 5, retry_attempts=3,
+        )
+
+        assert result.status_code == 404
+        assert client.get.call_count == 1      # No retry attempted
+
+    async def test_no_retry_on_too_many_redirects(self) -> None:
+        """A redirect-limit failure is not retried since it will recur identically."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=httpx.TooManyRedirects("Exceeded redirect limit"))
+
+        result = await _fetch_resource(
+            client, "https://redirect-loop.example.com", "homepage", 5, retry_attempts=3,
+        )
+
+        assert result.is_success is False
+        assert client.get.call_count == 1      # No retry attempted
+
+
+# ---------------------------------------------------------------------------
+# Tests for Wayback Machine fallback helpers
+# ---------------------------------------------------------------------------
+
+def _make_availability_response(snapshot_url: str = "", timestamp: str = "", available: bool = True) -> MagicMock:
+    """Build a mock archive.org availability API response."""
+    response = MagicMock()
+    closest = {"available": available, "url": snapshot_url, "timestamp": timestamp, "status": "200"} if snapshot_url else {}
+    response.json.return_value = {"archived_snapshots": {"closest": closest}}
+    return response
+
+
+class TestFetchWaybackSnapshot:
+    """Unit tests for _fetch_wayback_snapshot()."""
+
+    async def test_returns_archived_content_when_snapshot_available(self) -> None:
+        """A found snapshot is fetched and marked with used_wayback_fallback."""
+        snapshot_url = "http://web.archive.org/web/20230101000000/https://example.com/robots.txt"
+        availability = _make_availability_response(snapshot_url, "20230101000000")
+        snapshot_content = _make_mock_response(200, "User-agent: *\nDisallow:\n", snapshot_url)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=[availability, snapshot_content])
+
+        result = await _fetch_wayback_snapshot(client, "https://example.com/robots.txt", "robots.txt", 5)
+
+        assert result is not None
+        assert result.is_success is True
+        assert result.used_wayback_fallback is True
+        assert result.archived_snapshot_timestamp == "20230101000000"
+        assert result.url == "https://example.com/robots.txt"  # Original URL preserved
+        assert "Disallow" in result.content
+
+    async def test_returns_none_when_no_snapshot_available(self) -> None:
+        """No archived snapshot exists — the caller should keep the original failure."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=_make_availability_response(available=False))
+
+        result = await _fetch_wayback_snapshot(client, "https://example.com/robots.txt", "robots.txt", 5)
+
+        assert result is None
+
+    async def test_returns_none_when_availability_lookup_fails(self) -> None:
+        """A network error during the availability lookup is swallowed, not raised."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=httpx.RequestError("connection failed"))
+
+        result = await _fetch_wayback_snapshot(client, "https://example.com/robots.txt", "robots.txt", 5)
+
+        assert result is None
+
+    async def test_returns_none_when_snapshot_fetch_fails(self) -> None:
+        """A snapshot is listed as available but fetching it fails — treated as no fallback."""
+        snapshot_url = "http://web.archive.org/web/20230101000000/https://example.com/robots.txt"
+        availability = _make_availability_response(snapshot_url, "20230101000000")
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=[availability, _make_mock_response(404, "Not Found")])
+
+        result = await _fetch_wayback_snapshot(client, "https://example.com/robots.txt", "robots.txt", 5)
+
+        assert result is None
+
+
+class TestFetchWithWaybackFallback:
+    """Unit tests for _fetch_with_wayback_fallback()."""
+
+    async def test_returns_live_result_on_success(self) -> None:
+        """A successful live fetch is returned as-is, no Wayback lookup performed."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=_make_mock_response(200, "<html>ok</html>"))
+
+        result = await _fetch_with_wayback_fallback(client, "https://example.com", "homepage", 5)
+
+        assert result.is_success is True
+        assert result.used_wayback_fallback is False
+        assert client.get.call_count == 1  # Only the live fetch — no availability lookup
+
+    async def test_falls_back_to_archive_when_live_fetch_fails(self) -> None:
+        """A live failure with an available snapshot returns the archived content."""
+        snapshot_url = "http://web.archive.org/web/20230101000000/https://example.com/robots.txt"
+        availability = _make_availability_response(snapshot_url, "20230101000000")
+        snapshot_content = _make_mock_response(200, "User-agent: *\nDisallow:\n", snapshot_url)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=[
+            _make_mock_response(503, "Unavailable"),  # Live fetch fails
+            availability,
+            snapshot_content,
+        ])
+
+        with patch("src.services.fetch_service.asyncio.sleep", AsyncMock()):
+            result = await _fetch_with_wayback_fallback(
+                client, "https://example.com/robots.txt", "robots.txt", 5, retry_attempts=1,
+            )
+
+        assert result.is_success is True
+        assert result.used_wayback_fallback is True
+
+    async def test_keeps_original_failure_when_no_snapshot_and_fallback_disabled(self) -> None:
+        """With wayback_enabled=False, the original failure is returned without any lookup."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=_make_mock_response(503, "Unavailable"))
+
+        result = await _fetch_with_wayback_fallback(
+            client, "https://example.com/robots.txt", "robots.txt", 5,
+            retry_attempts=1, wayback_enabled=False,
+        )
+
+        assert result.is_success is False
+        assert client.get.call_count == 1  # No availability lookup attempted
 
 
 # ---------------------------------------------------------------------------

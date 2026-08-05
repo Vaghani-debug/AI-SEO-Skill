@@ -173,33 +173,41 @@ Useful for:
 
 # 5. Report Structure
 
-The report consists of twelve major sections.
+The report body is one continuous Markdown/PDF document following the canonical
+structure defined in `.github/report_templates/MASTER_REPORT_STRUCTURE.md`:
 
-1. Cover Page
+1. PART 1 — Full Website Audit (All Pages & URLs)
 
-2. Executive Summary
+2. PART 2 — Technical SEO Audit
 
-3. Website Overview
+3. PART 3 — On-Page & Content Audit
 
-4. Overall SEO Score
+4. SECTION 1 — Keyword Opportunity Strategy
 
-5. Priority Matrix
+5. SECTION 2 — Competitor Analysis
 
-6. Detailed Audit
+6. SECTION 3 — Location & Market Expansion Strategy
 
-7. AI Recommendations
+7. SECTION 4 — Structured Data Recommendations
 
-8. 30-Day Action Plan
+8. SECTION 5 — Off-Page SEO & GEO Strategy
 
-9. Developer Tasks
+9. SECTION 6 — Prioritized Execution Plan & KPIs
 
-10. Business Summary
+10. SECTION 7 — Executive Summary
 
-11. Appendix
+11. SECTION 8 — Methodology, Limitations & Sources
 
-12. Report Metadata
+The Executive Summary (SECTION 7) is generated last — after every other
+section's findings and research are complete — but is placed near the end of
+the document, immediately before Methodology, so it reads as a synthesis of
+the full audit rather than a lead-in.
 
-Each section has a dedicated specification.
+The PDF adds a cover header (website URL, name, audit date) and document
+metadata (title/author/subject) around this Markdown body; these are PDF
+presentation elements, not separate report sections.
+
+Each section has a dedicated specification in `MASTER_REPORT_STRUCTURE.md`.
 
 ---
 

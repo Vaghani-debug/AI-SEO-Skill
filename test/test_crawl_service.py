@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.services.audit_models import PageType, SiteInventory, SitemapEntry
+from src.services.audit_models import PageType, PerformanceEvidence, SiteInventory, SitemapEntry
 from src.services.crawl_service import (
     build_site_evidence,
     build_site_inventory,
@@ -44,7 +44,7 @@ def settings() -> Settings:
     return s
 
 
-def _resource(url: str, content: str, is_success: bool = True) -> FetchedResource:
+def _resource(url: str, content: str, is_success: bool = True, headers: dict[str, str] | None = None) -> FetchedResource:
     return FetchedResource(
         url=url,
         label=f"sitemap:{url}",
@@ -53,6 +53,7 @@ def _resource(url: str, content: str, is_success: bool = True) -> FetchedResourc
         content=content,
         is_success=is_success,
         is_fetched=True,
+        response_headers=headers or {},
     )
 
 
@@ -605,15 +606,18 @@ class TestBuildSiteEvidence:
     """
     Tests for build_site_evidence() — the orchestrator that assembles a
     production SiteEvidence from fetch_site() + build_site_inventory() +
-    crawl_sampled_pages(). Those three calls are patched here since they
-    are already covered by their own test classes above; this class only
-    verifies the orchestration/assembly logic.
+    crawl_sampled_pages() + fetch_performance_evidence(). Those calls are
+    patched here since they are already covered by their own test classes
+    above; this class only verifies the orchestration/assembly logic.
     """
 
     def _settings(self) -> Settings:
         s = Settings()
         s.fetch_timeout_seconds = 5
         return s
+
+    def _no_performance_data(self):
+        return AsyncMock(return_value=PerformanceEvidence(is_available=False, data_source=""))
 
     async def test_assembles_site_evidence_from_orchestrated_calls(self) -> None:
         site = SiteFetchResult(
@@ -638,7 +642,8 @@ class TestBuildSiteEvidence:
 
         with patch("src.services.crawl_service.fetch_site", AsyncMock(return_value=site)), \
              patch("src.services.crawl_service.build_site_inventory", AsyncMock(return_value=inventory)), \
-             patch("src.services.crawl_service.crawl_sampled_pages", AsyncMock(return_value=[sampled_resource])):
+             patch("src.services.crawl_service.crawl_sampled_pages", AsyncMock(return_value=[sampled_resource])), \
+             patch("src.services.crawl_service.fetch_performance_evidence", self._no_performance_data()):
             evidence = await build_site_evidence("https://example.com", self._settings())
 
         assert evidence.base_url == "https://example.com"
@@ -650,6 +655,55 @@ class TestBuildSiteEvidence:
         assert evidence.sampled_pages[0].page_type == PageType.CORE
         assert evidence.inventory is inventory
         assert evidence.robots_txt is not None
+        assert evidence.security_headers is not None
+        assert evidence.security_headers.has_hsts is False  # No headers set on the mock homepage
+
+    async def test_performance_evidence_populated_from_pagespeed_call(self) -> None:
+        site = SiteFetchResult(
+            base_url="https://example.com",
+            homepage=_resource("https://example.com", "<html></html>"),
+            robots_txt=_resource("https://example.com/robots.txt", ""),
+            sitemap_xml=_resource("https://example.com/sitemap.xml", ""),
+        )
+        inventory = SiteInventory(base_url="https://example.com", entries=[], total_url_count=0, sampled_urls=[])
+        performance = PerformanceEvidence(
+            is_available=True, data_source="field",
+            performance_score=91.0, largest_contentful_paint_ms=2100.0,
+            cumulative_layout_shift=0.05, interaction_to_next_paint_ms=150.0,
+            source_url="https://example.com",
+        )
+
+        with patch("src.services.crawl_service.fetch_site", AsyncMock(return_value=site)), \
+             patch("src.services.crawl_service.build_site_inventory", AsyncMock(return_value=inventory)), \
+             patch("src.services.crawl_service.crawl_sampled_pages", AsyncMock(return_value=[])), \
+             patch("src.services.crawl_service.fetch_performance_evidence", AsyncMock(return_value=performance)):
+            evidence = await build_site_evidence("https://example.com", self._settings())
+
+        assert evidence.performance is performance
+        assert evidence.performance.data_source == "field"
+
+    async def test_security_headers_reflect_homepage_response_headers(self) -> None:
+        site = SiteFetchResult(
+            base_url="https://example.com",
+            homepage=_resource(
+                "https://example.com", "<html></html>",
+                headers={"strict-transport-security": "max-age=31536000", "x-frame-options": "DENY"},
+            ),
+            robots_txt=_resource("https://example.com/robots.txt", ""),
+            sitemap_xml=_resource("https://example.com/sitemap.xml", ""),
+        )
+        inventory = SiteInventory(base_url="https://example.com", entries=[], total_url_count=0, sampled_urls=[])
+
+        with patch("src.services.crawl_service.fetch_site", AsyncMock(return_value=site)), \
+             patch("src.services.crawl_service.build_site_inventory", AsyncMock(return_value=inventory)), \
+             patch("src.services.crawl_service.crawl_sampled_pages", AsyncMock(return_value=[])), \
+             patch("src.services.crawl_service.fetch_performance_evidence", self._no_performance_data()):
+            evidence = await build_site_evidence("https://example.com", self._settings())
+
+        assert evidence.security_headers.has_hsts is True
+        assert evidence.security_headers.hsts_value == "max-age=31536000"
+        assert evidence.security_headers.has_x_frame_options is True
+        assert evidence.security_headers.has_content_security_policy is False
 
     async def test_defaults_unmatched_sampled_page_to_utility_type(self) -> None:
         # A sampled URL with no matching inventory entry (defensive edge case) still gets a PageType.
@@ -664,7 +718,8 @@ class TestBuildSiteEvidence:
 
         with patch("src.services.crawl_service.fetch_site", AsyncMock(return_value=site)), \
              patch("src.services.crawl_service.build_site_inventory", AsyncMock(return_value=inventory)), \
-             patch("src.services.crawl_service.crawl_sampled_pages", AsyncMock(return_value=[sampled_resource])):
+             patch("src.services.crawl_service.crawl_sampled_pages", AsyncMock(return_value=[sampled_resource])), \
+             patch("src.services.crawl_service.fetch_performance_evidence", self._no_performance_data()):
             evidence = await build_site_evidence("https://example.com", self._settings())
 
         assert evidence.sampled_pages[0].page_type == PageType.UTILITY

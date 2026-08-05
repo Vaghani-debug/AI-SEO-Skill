@@ -24,6 +24,7 @@ from src.services.audit_models import (
     Finding,
     PageEvidence,
     PageType,
+    PerformanceEvidence,
     ResearchBundle,
     ResearchClaim,
     ScoreBreakdown,
@@ -496,23 +497,23 @@ class TestExtractSectionBody:
 # ---------------------------------------------------------------------------
 
 class TestValidateLocationSection:
-    """Tests for the PART 7 conditional local-vs-market-expansion rule."""
+    """Tests for the SECTION 3 conditional local-vs-market-expansion rule."""
 
-    def test_no_issues_when_only_72_completed(self) -> None:
+    def test_no_issues_when_only_32_completed(self) -> None:
         report = (
-            "## 7.2 Local Location Opportunities\n"
+            "## 3.2 Local Location Opportunities\n"
             "Bangalore, Chennai, Hyderabad are strong candidates.\n"
-            "## 7.3 Audience & Market Expansion Opportunities\n"
+            "## 3.3 Audience & Market Expansion Opportunities\n"
             "Not applicable — business does not target specific locations.\n"
             "---\n"
         )
         assert _validate_location_section(report) == []
 
-    def test_no_issues_when_only_73_completed(self) -> None:
+    def test_no_issues_when_only_33_completed(self) -> None:
         report = (
-            "## 7.2 Local Location Opportunities\n"
+            "## 3.2 Local Location Opportunities\n"
             "Not applicable — business is not location-based.\n"
-            "## 7.3 Audience & Market Expansion Opportunities\n"
+            "## 3.3 Audience & Market Expansion Opportunities\n"
             "SaaS teams and enterprise buyers are the primary expansion audience.\n"
             "---\n"
         )
@@ -520,9 +521,9 @@ class TestValidateLocationSection:
 
     def test_issue_when_both_marked_not_applicable(self) -> None:
         report = (
-            "## 7.2 Local Location Opportunities\n"
+            "## 3.2 Local Location Opportunities\n"
             "Not applicable — business is not location-based.\n"
-            "## 7.3 Audience & Market Expansion Opportunities\n"
+            "## 3.3 Audience & Market Expansion Opportunities\n"
             "Not applicable — business does not target specific locations.\n"
             "---\n"
         )
@@ -532,9 +533,9 @@ class TestValidateLocationSection:
 
     def test_issue_when_both_completed(self) -> None:
         report = (
-            "## 7.2 Local Location Opportunities\n"
+            "## 3.2 Local Location Opportunities\n"
             "Bangalore, Chennai are strong candidates.\n"
-            "## 7.3 Audience & Market Expansion Opportunities\n"
+            "## 3.3 Audience & Market Expansion Opportunities\n"
             "Enterprise buyers are a strong expansion audience.\n"
             "---\n"
         )
@@ -542,9 +543,9 @@ class TestValidateLocationSection:
         assert len(issues) == 1
         assert "both completed" in issues[0]
 
-    def test_no_issues_when_part_7_headings_absent(self) -> None:
-        """Templates without PART 7 (or missing headings) are not flagged here."""
-        assert _validate_location_section("# PART 1: EXECUTIVE SUMMARY\nContent.") == []
+    def test_no_issues_when_section_3_headings_absent(self) -> None:
+        """Templates without SECTION 3 (or missing headings) are not flagged here."""
+        assert _validate_location_section("# PART 1: FULL WEBSITE AUDIT\nContent.") == []
 
 
 # ---------------------------------------------------------------------------
@@ -927,10 +928,12 @@ def _make_claim(claim: str = "Claim", value: str = "Value") -> ResearchClaim:
 
 class TestSectionGroups:
 
-    def test_covers_every_part_heading_exactly_once(self) -> None:
-        all_parts = [part for _, parts in _SECTION_GROUPS for part in parts]
-        assert sorted(all_parts, key=lambda p: int(p.split(" ")[1])) == [f"PART {n}" for n in range(1, 12)]
-        assert len(all_parts) == len(set(all_parts))
+    def test_covers_every_part_and_section_heading_exactly_once(self) -> None:
+        all_headings = [heading for _, headings in _SECTION_GROUPS for heading in headings]
+        assert sorted(all_headings) == sorted(
+            [f"PART {n}" for n in range(1, 4)] + [f"SECTION {n}" for n in range(1, 9)]
+        )
+        assert len(all_headings) == len(set(all_headings))
 
     def test_has_five_to_seven_groups(self) -> None:
         assert 5 <= len(_SECTION_GROUPS) <= 7
@@ -960,6 +963,29 @@ class TestFormatSectionEvidence:
         text = _format_section_evidence("technical_and_onpage", _make_context())
         assert "No Technical SEO findings were recorded" in text
         assert "No On-Page or Content Quality findings were recorded" in text
+        assert "No Core Web Vitals / PageSpeed data was collected for this audit." in text
+        assert "No Performance findings were recorded" in text
+
+    def test_technical_and_onpage_includes_performance_evidence_when_available(self) -> None:
+        site_evidence = _make_site_evidence(performance=PerformanceEvidence(
+            is_available=True, data_source="field", performance_score=88.0,
+            largest_contentful_paint_ms=2200.0, cumulative_layout_shift=0.05,
+            interaction_to_next_paint_ms=150.0, source_url="https://example.com",
+        ))
+        findings = [_make_finding("Performance", title="LCP needs improvement")]
+        context = _make_context(
+            site_evidence=site_evidence, score_breakdown=ScoreBreakdown(overall_score=70.0, findings=findings),
+        )
+        text = _format_section_evidence("technical_and_onpage", context)
+        assert "Performance score: 88/100" in text
+        assert "Largest Contentful Paint (LCP): 2.2s" in text
+        assert "LCP needs improvement" in text
+
+    def test_structured_data_and_execution_no_longer_includes_performance_findings(self) -> None:
+        findings = [_make_finding("Performance", title="LCP needs improvement")]
+        context = _make_context(score_breakdown=ScoreBreakdown(overall_score=70.0, findings=findings))
+        text = _format_section_evidence("structured_data_and_execution", context)
+        assert "LCP needs improvement" not in text
 
     def test_keyword_strategy_formats_claims_with_citation(self) -> None:
         research = ResearchBundle(keyword_opportunities=[_make_claim("Keyword", "sourdough bread austin")])
@@ -999,6 +1025,15 @@ class TestFormatSectionEvidence:
         research = ResearchBundle(authority_opportunities=[_make_claim("Directory", "Local business directory")])
         text = _format_section_evidence("structured_data_and_execution", _make_context(research=research))
         assert "Local business directory" in text
+
+    def test_structured_data_and_execution_includes_brand_presence_claims(self) -> None:
+        research = ResearchBundle(brand_presence=[_make_claim("Brand Presence", "Listed on Yelp")])
+        text = _format_section_evidence("structured_data_and_execution", _make_context(research=research))
+        assert "Listed on Yelp" in text
+
+    def test_structured_data_and_execution_reports_no_brand_presence_message(self) -> None:
+        text = _format_section_evidence("structured_data_and_execution", _make_context())
+        assert "No existing brand presence signals were found" in text
 
     def test_executive_summary_includes_score_and_top_priority_findings(self) -> None:
         findings = [
@@ -1081,17 +1116,17 @@ class TestGenerateReportSections:
             audit_prompt="Audit {{website_url}}.",
             seo_skill="Priority: Crawlability, Technical, On-Page, Content.",
             master_report_structure=(
-                "# PART 1: EXECUTIVE SUMMARY\n\nBody.\n\n"
-                "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n\n"
-                "# PART 3: TECHNICAL SEO AUDIT\n\nBody.\n\n"
-                "# PART 4: ON-PAGE & CONTENT AUDIT\n\nBody.\n\n"
-                "# PART 5: KEYWORD OPPORTUNITY STRATEGY\n\nBody.\n\n"
-                "# PART 6: COMPETITOR ANALYSIS\n\nBody.\n\n"
-                "# PART 7: LOCATION & MARKET EXPANSION STRATEGY\n\n## 7.2\nBody.\n## 7.3\nNot applicable.\n\n"
-                "# PART 8: STRUCTURED DATA RECOMMENDATIONS\n\nBody.\n\n"
-                "# PART 9: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n\n"
-                "# PART 10: PRIORITIZED EXECUTION PLAN & KPIS\n\nBody.\n\n"
-                "# PART 11: METHODOLOGY, LIMITATIONS & SOURCES\n\nBody.\n"
+                "# PART 1: FULL WEBSITE AUDIT\n\nBody.\n\n"
+                "# PART 2: TECHNICAL SEO AUDIT\n\nBody.\n\n"
+                "# PART 3: ON-PAGE & CONTENT AUDIT\n\nBody.\n\n"
+                "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\nBody.\n\n"
+                "# SECTION 2: COMPETITOR ANALYSIS\n\nBody.\n\n"
+                "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n## 3.2\nBody.\n## 3.3\nNot applicable.\n\n"
+                "# SECTION 4: STRUCTURED DATA RECOMMENDATIONS\n\nBody.\n\n"
+                "# SECTION 5: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n\n"
+                "# SECTION 6: PRIORITIZED EXECUTION PLAN & KPIS\n\nBody.\n\n"
+                "# SECTION 7: EXECUTIVE SUMMARY\n\nBody.\n\n"
+                "# SECTION 8: METHODOLOGY, LIMITATIONS & SOURCES\n\nBody.\n"
             ),
             ai_guidelines="Never invent findings. Use verified evidence only.",
         )
@@ -1102,9 +1137,9 @@ class TestGenerateReportSections:
         context = _make_context()
 
         async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
-            headings = re.findall(r"# PART \d+:[^\n]*", user_message)
-            if any(h.startswith("# PART 7:") for h in headings):
-                return "# PART 7: LOCATION & MARKET EXPANSION STRATEGY\n\n## 7.2\nBody.\n## 7.3\nNot applicable.\n"
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+            if any(h.startswith("# SECTION 3:") for h in headings):
+                return "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n## 3.2\nBody.\n## 3.3\nNot applicable.\n"
             return "\n\n".join(f"{h}\n\nGenerated content." for h in headings)
 
         with patch("src.services.report_service._call_llm", side_effect=fake_call_llm):
@@ -1121,14 +1156,14 @@ class TestGenerateReportSections:
         technical_call_count = {"n": 0}
 
         async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
-            headings = re.findall(r"# PART \d+:[^\n]*", user_message)
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
             if any(h.startswith("# PART 3:") for h in headings):
                 technical_call_count["n"] += 1
                 if technical_call_count["n"] == 1:
-                    return "# PART 3: TECHNICAL SEO AUDIT\n\nMissing the PART 4 heading on purpose."
-                return "# PART 3: TECHNICAL SEO AUDIT\n\nFixed on retry.\n\n# PART 4: ON-PAGE & CONTENT AUDIT\n\nFixed too."
-            if any(h.startswith("# PART 7:") for h in headings):
-                return "# PART 7: LOCATION & MARKET EXPANSION STRATEGY\n\n## 7.2\nBody.\n## 7.3\nNot applicable.\n"
+                    return "# PART 2: TECHNICAL SEO AUDIT\n\nMissing the PART 3 heading on purpose."
+                return "# PART 2: TECHNICAL SEO AUDIT\n\nFixed on retry.\n\n# PART 3: ON-PAGE & CONTENT AUDIT\n\nFixed too."
+            if any(h.startswith("# SECTION 3:") for h in headings):
+                return "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n## 3.2\nBody.\n## 3.3\nNot applicable.\n"
             return "\n\n".join(f"{h}\n\nOK." for h in headings)
 
         with patch("src.services.report_service._call_llm", side_effect=fake_call_llm) as mock_call:
@@ -1160,26 +1195,31 @@ class TestGenerateReportSections:
 
 class TestAssembleReportMarkdown:
 
-    def test_orders_by_part_number_not_generation_order(self) -> None:
-        # Insertion order mirrors _SECTION_GROUPS' generation order (executive_summary last),
-        # but the assembled output must lead with PART 1 (executive_summary).
+    def test_orders_groups_by_declaration_order_and_splices_executive_summary_before_methodology(self) -> None:
+        # Insertion order mirrors _SECTION_GROUPS' generation order (executive_summary last), but
+        # the assembled output must read in declaration order with SECTION 7 spliced in immediately
+        # before SECTION 8 (Methodology), which is generated earlier as part of the same batch.
         sections = {
-            "site_inventory": "# PART 2: FULL WEBSITE AUDIT\n\nInventory body.",
-            "technical_and_onpage": "# PART 3: TECHNICAL SEO AUDIT\n\nTechnical body.",
-            "keyword_strategy": "# PART 5: KEYWORD OPPORTUNITY STRATEGY\n\nKeyword body.",
-            "competitor_analysis": "# PART 6: COMPETITOR ANALYSIS\n\nCompetitor body.",
-            "location_or_market_expansion": "# PART 7: LOCATION STRATEGY\n\nLocation body.",
-            "structured_data_and_execution": "# PART 8: STRUCTURED DATA\n\nExecution body.",
-            "executive_summary": "# PART 1: EXECUTIVE SUMMARY\n\nSummary body.",
+            "site_inventory": "# PART 1: FULL WEBSITE AUDIT\n\nInventory body.",
+            "technical_and_onpage": "# PART 2: TECHNICAL SEO AUDIT\n\nTechnical body.",
+            "keyword_strategy": "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\nKeyword body.",
+            "competitor_analysis": "# SECTION 2: COMPETITOR ANALYSIS\n\nCompetitor body.",
+            "location_or_market_expansion": "# SECTION 3: LOCATION STRATEGY\n\nLocation body.",
+            "structured_data_and_execution": (
+                "# SECTION 4: STRUCTURED DATA\n\nStructured data body.\n\n"
+                "# SECTION 8: METHODOLOGY\n\nMethodology body."
+            ),
+            "executive_summary": "# SECTION 7: EXECUTIVE SUMMARY\n\nSummary body.",
         }
         markdown = assemble_report_markdown(sections)
 
         assert markdown.index("PART 1") < markdown.index("PART 2")
-        assert markdown.index("PART 2") < markdown.index("PART 3")
-        assert markdown.index("PART 3") < markdown.index("PART 5")
-        assert markdown.index("PART 5") < markdown.index("PART 6")
-        assert markdown.index("PART 6") < markdown.index("PART 7")
-        assert markdown.index("PART 7") < markdown.index("PART 8")
+        assert markdown.index("PART 2") < markdown.index("SECTION 1")
+        assert markdown.index("SECTION 1") < markdown.index("SECTION 2")
+        assert markdown.index("SECTION 2") < markdown.index("SECTION 3")
+        assert markdown.index("SECTION 3") < markdown.index("SECTION 4")
+        assert markdown.index("SECTION 4") < markdown.index("SECTION 7")
+        assert markdown.index("SECTION 7") < markdown.index("SECTION 8")
 
     def test_joins_all_section_bodies(self) -> None:
         sections = {
@@ -1337,15 +1377,15 @@ class TestValidateAssembledReport:
         issues = validate_assembled_report(report, self._TEMPLATE, _make_context())
         assert any("empty cell" in issue for issue in issues)
 
-    def test_flags_part_7_conditional_violation(self) -> None:
-        template = self._TEMPLATE + "# PART 7: LOCATION STRATEGY\n"
+    def test_flags_section_3_conditional_violation(self) -> None:
+        template = self._TEMPLATE + "# SECTION 3: LOCATION STRATEGY\n"
         report = (
             "# PART 1: EXECUTIVE SUMMARY\n\nBody.\n\n"
             "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n\n"
-            "# PART 7: LOCATION STRATEGY\n\n## 7.2\nCompleted.\n## 7.3\nAlso completed.\n"
+            "# SECTION 3: LOCATION STRATEGY\n\n## 3.2\nCompleted.\n## 3.3\nAlso completed.\n"
         )
         issues = validate_assembled_report(report, template, _make_context())
-        assert any("7.2" in issue and "7.3" in issue for issue in issues)
+        assert any("3.2" in issue and "3.3" in issue for issue in issues)
 
     def test_allows_urls_from_crawl_evidence_and_research(self) -> None:
         context = _make_context(research=ResearchBundle(keyword_opportunities=[_make_claim()]))
@@ -1431,6 +1471,29 @@ class TestValidateAssembledReport:
         issues = validate_assembled_report(report, self._TEMPLATE, _make_context())
         assert any("PageSpeed/Lighthouse score" in issue for issue in issues)
 
+    def test_allows_core_web_vitals_value_when_performance_evidence_available(self) -> None:
+        context = _make_context(site_evidence=_make_site_evidence(
+            performance=PerformanceEvidence(is_available=True, data_source="field", largest_contentful_paint_ms=2400.0),
+        ))
+        report = (
+            "# PART 1: EXECUTIVE SUMMARY\n\nYour LCP is 2.4s, which is too slow.\n\n"
+            "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
+        )
+        issues = validate_assembled_report(report, self._TEMPLATE, context)
+        assert not any("Core Web Vitals" in issue for issue in issues)
+
+    def test_still_flags_keyword_ranking_and_backlinks_when_performance_evidence_available(self) -> None:
+        context = _make_context(site_evidence=_make_site_evidence(
+            performance=PerformanceEvidence(is_available=True, data_source="lab"),
+        ))
+        report = (
+            "# PART 1: EXECUTIVE SUMMARY\n\nYou rank #3 for 'bakery near me' and have 120 backlinks.\n\n"
+            "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
+        )
+        issues = validate_assembled_report(report, self._TEMPLATE, context)
+        assert any("keyword ranking position" in issue for issue in issues)
+        assert any("backlink count" in issue for issue in issues)
+
     def test_flags_invented_keyword_ranking(self) -> None:
         report = (
             "# PART 1: EXECUTIVE SUMMARY\n\nYou rank #3 for 'bakery near me'.\n\n"
@@ -1449,7 +1512,7 @@ class TestValidateAssembledReport:
 
     def test_flags_executive_summary_over_400_words(self) -> None:
         report = (
-            "# PART 1: EXECUTIVE SUMMARY\n\n" + ("word " * 401) + "\n\n"
+            "# SECTION 7: EXECUTIVE SUMMARY\n\n" + ("word " * 401) + "\n\n"
             "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
         )
         issues = validate_assembled_report(report, self._TEMPLATE, _make_context())
@@ -1457,7 +1520,7 @@ class TestValidateAssembledReport:
 
     def test_allows_executive_summary_at_400_words(self) -> None:
         report = (
-            "# PART 1: EXECUTIVE SUMMARY\n\n" + ("word " * 400) + "\n\n"
+            "# SECTION 7: EXECUTIVE SUMMARY\n\n" + ("word " * 400) + "\n\n"
             "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
         )
         issues = validate_assembled_report(report, self._TEMPLATE, _make_context())

@@ -25,6 +25,7 @@ Public interface:
     research_competitors(site_url, business_summary, settings) -> list[ResearchClaim]
     research_competitor_analysis(site_url, competitor_names, settings) -> list[ResearchClaim]
     research_authority_opportunities(site_url, business_summary, settings) -> list[ResearchClaim]
+    research_brand_presence(site_url, business_summary, settings) -> list[ResearchClaim]
     research_local_demand(site_url, business_summary, city_or_region, settings) -> list[ResearchClaim]
     research_audience_expansion(site_url, business_summary, settings) -> list[ResearchClaim]
 """
@@ -35,7 +36,13 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 
 from src.config import Settings
 from src.services.audit_models import PageType, ResearchBundle, ResearchClaim, SiteEvidence
@@ -128,10 +135,11 @@ async def research_site(
     provided; otherwise an audience/market expansion search replaces it,
     so non-local sites never get a thin, unfounded city strategy.
     """
-    keyword_opportunities, competitors, authority_opportunities = await asyncio.gather(
+    keyword_opportunities, competitors, authority_opportunities, brand_presence = await asyncio.gather(
         research_keyword_opportunities(site_url, business_summary, settings),
         research_competitors(site_url, business_summary, settings),
         research_authority_opportunities(site_url, business_summary, settings),
+        research_brand_presence(site_url, business_summary, settings),
     )
 
     competitor_names = [claim.value for claim in competitors if claim.value]
@@ -149,6 +157,7 @@ async def research_site(
         competitors=competitors,
         competitor_analysis=competitor_analysis,
         authority_opportunities=authority_opportunities,
+        brand_presence=brand_presence,
         local_demand=local_demand,
         audience_expansion=audience_expansion,
     )
@@ -224,6 +233,32 @@ async def research_authority_opportunities(
     return claims
 
 
+async def research_brand_presence(
+    site_url: str, business_summary: str, settings: Settings,
+) -> list[ResearchClaim]:
+    """
+    Bounded search for where this brand is already visible online today
+    (business directories, social profiles, press mentions, review sites).
+
+    Covers SEO_RULES.md Section 5's required "Brand Presence" check. Domain
+    Authority and Basic Backlink Summary are marked optional in that same
+    section and are intentionally not implemented - no free, verified data
+    source exists for either, and an LLM guess at a specific number would
+    violate this report's "never invent backlinks" rule.
+    """
+    system_prompt = (
+        "You are an SEO researcher. Find real, existing evidence of this "
+        "brand's current online presence - business directory listings, "
+        "social media profiles, review sites, or press mentions you can "
+        "actually verify exist. Do not suggest opportunities to pursue; "
+        "only report presence that already exists today. " + _JSON_FORMAT_INSTRUCTIONS
+    )
+    user_message = f"Website: {site_url}\nBusiness summary: {business_summary}"
+    claims = _parse_claims(await _call_perplexity_json(system_prompt, user_message, settings))
+    logger.info("research_brand_presence: %d claim(s) for %s", len(claims), site_url)
+    return claims
+
+
 async def research_local_demand(
     site_url: str, business_summary: str, city_or_region: str, settings: Settings,
 ) -> list[ResearchClaim]:
@@ -266,31 +301,56 @@ async def research_audience_expansion(
 
 
 async def _call_perplexity_json(system_prompt: str, user_message: str, settings: Settings) -> str:
-    """Call Perplexity and return the raw response text, or "" on any failure."""
+    """
+    Call Perplexity and return the raw response text, or "" on any failure.
+
+    Transient failures (rate limits, timeouts, connection errors, 5xx) are
+    retried with exponential backoff, up to settings.perplexity_retry_attempts.
+    A real auth/bad-request error is returned immediately since retrying
+    would not change the outcome.
+    """
     if not settings.perplexity_api_key:
         logger.warning("PERPLEXITY_API_KEY is not configured; skipping external research call.")
         return ""
 
     client = AsyncOpenAI(api_key=settings.perplexity_api_key, base_url=_PERPLEXITY_BASE_URL)
+    retry_attempts = settings.perplexity_retry_attempts
+    backoff_base_seconds = settings.perplexity_retry_backoff_base_seconds
 
-    try:
-        response = await client.chat.completions.create(
-            model=settings.perplexity_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=_MAX_RESEARCH_TOKENS,
-        )
-    except Exception as research_error:
-        logger.error("Perplexity research call failed: %s", research_error)
-        return ""
+    attempt = 1
+    while True:
+        try:
+            response = await client.chat.completions.create(
+                model=settings.perplexity_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=_MAX_RESEARCH_TOKENS,
+            )
+        except (RateLimitError, APITimeoutError, APIConnectionError, InternalServerError) as transient_error:
+            if attempt >= retry_attempts:
+                logger.error(
+                    "Perplexity research call failed after %d attempt(s): %s", attempt, transient_error,
+                )
+                return ""
+            delay = backoff_base_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "Transient Perplexity failure (attempt %d/%d), retrying in %.1fs: %s",
+                attempt, retry_attempts, delay, transient_error,
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+            continue
+        except Exception as research_error:
+            logger.error("Perplexity research call failed: %s", research_error)
+            return ""
 
-    if not response or not response.choices or not response.choices[0].message.content:
-        logger.warning("Perplexity research call returned an empty response")
-        return ""
+        if not response or not response.choices or not response.choices[0].message.content:
+            logger.warning("Perplexity research call returned an empty response")
+            return ""
 
-    return response.choices[0].message.content
+        return response.choices[0].message.content
 
 
 def _parse_claims(raw_text: str) -> list[ResearchClaim]:

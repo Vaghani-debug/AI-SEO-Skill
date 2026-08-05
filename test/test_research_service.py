@@ -15,15 +15,19 @@ Run with:
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from src.config import Settings
 from src.services.audit_models import PageEvidence, PageType, ResearchClaim, SiteEvidence
 from src.services.research_service import (
+    _call_perplexity_json,
     _parse_claims,
     classify_local_business,
     research_audience_expansion,
     research_authority_opportunities,
+    research_brand_presence,
     research_competitor_analysis,
     research_competitors,
     research_keyword_opportunities,
@@ -197,6 +201,64 @@ class TestResearchFunctions:
 
 
 # ---------------------------------------------------------------------------
+# _call_perplexity_json() — transient-failure retry/backoff
+# ---------------------------------------------------------------------------
+
+def _rate_limit_error() -> RateLimitError:
+    request = httpx.Request("POST", "https://api.perplexity.ai/chat/completions")
+    return RateLimitError("rate limited", response=httpx.Response(429, request=request), body=None)
+
+
+def _timeout_error() -> APITimeoutError:
+    return APITimeoutError(request=httpx.Request("POST", "https://api.perplexity.ai/chat/completions"))
+
+
+def _connection_error() -> APIConnectionError:
+    return APIConnectionError(request=httpx.Request("POST", "https://api.perplexity.ai/chat/completions"))
+
+
+def _internal_server_error() -> InternalServerError:
+    request = httpx.Request("POST", "https://api.perplexity.ai/chat/completions")
+    return InternalServerError("server error", response=httpx.Response(500, request=request), body=None)
+
+
+class TestCallPerplexityJsonRetry:
+
+    async def test_retries_transient_failure_then_succeeds(self, settings: Settings) -> None:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=[_rate_limit_error(), _mock_response(_VALID_CLAIMS_JSON)],
+        )
+        with patch("src.services.research_service.AsyncOpenAI", return_value=mock_client), \
+             patch("src.services.research_service.asyncio.sleep", AsyncMock()):
+            result = await _call_perplexity_json("system", "user", settings)
+        assert result == _VALID_CLAIMS_JSON
+        assert mock_client.chat.completions.create.call_count == 2
+
+    @pytest.mark.parametrize("make_error", [_rate_limit_error, _timeout_error, _connection_error, _internal_server_error])
+    async def test_gives_up_after_max_retry_attempts(self, settings: Settings, make_error) -> None:
+        settings.perplexity_retry_attempts = 3
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=[make_error(), make_error(), make_error()])
+        with patch("src.services.research_service.AsyncOpenAI", return_value=mock_client), \
+             patch("src.services.research_service.asyncio.sleep", AsyncMock()) as mock_sleep:
+            result = await _call_perplexity_json("system", "user", settings)
+        assert result == ""
+        assert mock_client.chat.completions.create.call_count == 3
+        assert mock_sleep.await_count == 2  # backoff sleeps happen between attempts, not after the final one
+
+    async def test_non_transient_error_is_not_retried(self, settings: Settings) -> None:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("bad request"))
+        with patch("src.services.research_service.AsyncOpenAI", return_value=mock_client), \
+             patch("src.services.research_service.asyncio.sleep", AsyncMock()) as mock_sleep:
+            result = await _call_perplexity_json("system", "user", settings)
+        assert result == ""
+        assert mock_client.chat.completions.create.call_count == 1
+        mock_sleep.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # research_site() orchestrator — assembles the ResearchBundle
 # ---------------------------------------------------------------------------
 
@@ -217,6 +279,8 @@ class TestResearchSiteOrchestrator:
                   AsyncMock(return_value=[_claim("Competitor", "Joe's Bakery")])),
             patch("src.services.research_service.research_authority_opportunities",
                   AsyncMock(return_value=[_claim("Authority", "Local food blog")])),
+            patch("src.services.research_service.research_brand_presence",
+                  AsyncMock(return_value=[_claim("Brand Presence", "Listed on Yelp")])),
             patch("src.services.research_service.research_competitor_analysis",
                   AsyncMock(return_value=[_claim("Gap", "No online ordering")])) as mock_analysis,
             patch("src.services.research_service.research_local_demand",
@@ -231,6 +295,7 @@ class TestResearchSiteOrchestrator:
         assert len(bundle.keyword_opportunities) == 1
         assert len(bundle.competitors) == 1
         assert len(bundle.authority_opportunities) == 1
+        assert len(bundle.brand_presence) == 1
         assert len(bundle.competitor_analysis) == 1
         assert len(bundle.local_demand) == 1
         assert bundle.audience_expansion == []
@@ -243,6 +308,7 @@ class TestResearchSiteOrchestrator:
             patch("src.services.research_service.research_keyword_opportunities", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_competitors", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_authority_opportunities", AsyncMock(return_value=[])),
+            patch("src.services.research_service.research_brand_presence", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_competitor_analysis", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_local_demand", AsyncMock(return_value=[])) as mock_local,
             patch("src.services.research_service.research_audience_expansion",
@@ -262,6 +328,7 @@ class TestResearchSiteOrchestrator:
             patch("src.services.research_service.research_keyword_opportunities", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_competitors", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_authority_opportunities", AsyncMock(return_value=[])),
+            patch("src.services.research_service.research_brand_presence", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_competitor_analysis", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_local_demand", AsyncMock(return_value=[])) as mock_local,
             patch("src.services.research_service.research_audience_expansion", AsyncMock(return_value=[])) as mock_audience,
@@ -279,6 +346,7 @@ class TestResearchSiteOrchestrator:
             patch("src.services.research_service.research_keyword_opportunities", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_competitors", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_authority_opportunities", AsyncMock(return_value=[])),
+            patch("src.services.research_service.research_brand_presence", AsyncMock(return_value=[])),
             patch("src.services.research_service.research_competitor_analysis", AsyncMock(return_value=[])) as mock_analysis,
             patch("src.services.research_service.research_audience_expansion", AsyncMock(return_value=[])),
         ):
@@ -303,6 +371,25 @@ class TestResearchAudienceExpansion:
     async def test_missing_api_key_returns_empty_list(self) -> None:
         empty_settings = Settings(perplexity_api_key="", perplexity_model="sonar-pro")
         claims = await research_audience_expansion("https://example.com", "A SaaS product", empty_settings)
+        assert claims == []
+
+
+# ---------------------------------------------------------------------------
+# research_brand_presence()
+# ---------------------------------------------------------------------------
+
+class TestResearchBrandPresence:
+
+    async def test_returns_parsed_claims(self, settings: Settings) -> None:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=_mock_response(_VALID_CLAIMS_JSON))
+        with patch("src.services.research_service.AsyncOpenAI", return_value=mock_client):
+            claims = await research_brand_presence("https://example.com", "A local bakery", settings)
+        assert len(claims) == 1
+
+    async def test_missing_api_key_returns_empty_list(self) -> None:
+        empty_settings = Settings(perplexity_api_key="", perplexity_model="sonar-pro")
+        claims = await research_brand_presence("https://example.com", "A local bakery", empty_settings)
         assert claims == []
 
 

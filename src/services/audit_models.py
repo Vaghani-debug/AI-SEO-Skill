@@ -101,6 +101,60 @@ class SitemapEvidence:
     # Actual <loc> URLs; gives the LLM page inventory to populate tables without "Not Detected"
 
 
+@dataclass
+class SecurityHeadersEvidence:
+    """
+    Presence/value of key security-relevant HTTP response headers on the homepage.
+
+    Captured directly from the already-fetched homepage response (fetch_service's
+    FetchedResource.response_headers) — no extra network call is needed, so this
+    evidence is free to collect and always verifiable (never guessed).
+    """
+
+    has_hsts: bool
+    hsts_value: str | None
+
+    has_content_security_policy: bool
+    content_security_policy_value: str | None
+
+    has_x_content_type_options: bool
+    x_content_type_options_value: str | None
+
+    has_x_frame_options: bool
+    x_frame_options_value: str | None
+
+    has_referrer_policy: bool
+    referrer_policy_value: str | None
+
+
+@dataclass
+class PerformanceEvidence:
+    """
+    Core Web Vitals and Lighthouse performance data from Google PageSpeed
+    Insights (free public API) for the homepage.
+
+    data_source distinguishes real-user field data ("field", from the
+    Chrome UX Report) from lab-simulated data ("lab", a single Lighthouse
+    run) so the report never conflates the two. is_available is False
+    (with every metric None) whenever PSI could not be reached or returned
+    no usable data - never guessed or invented.
+    """
+
+    is_available: bool
+    data_source: str
+    # "field", "lab", or "" when is_available is False
+
+    performance_score: float | None = None
+    # Lighthouse Performance category score, 0-100
+
+    largest_contentful_paint_ms: float | None = None
+    cumulative_layout_shift: float | None = None
+    interaction_to_next_paint_ms: float | None = None
+
+    source_url: str = ""
+    # The audited URL as submitted to PageSpeed Insights, kept as a citation
+
+
 # ---------------------------------------------------------------------------
 # Page classification
 # ---------------------------------------------------------------------------
@@ -248,6 +302,12 @@ class SiteEvidence:
     robots_txt: RobotsTxtEvidence | None = None
     sitemaps: list[SitemapEvidence] = field(default_factory=list)
 
+    security_headers: SecurityHeadersEvidence | None = None
+    # HTTP security headers observed on the homepage response; None if the homepage fetch failed
+
+    performance: PerformanceEvidence | None = None
+    # Core Web Vitals / Lighthouse data from PageSpeed Insights; None if PSI was unavailable
+
     unverifiable_fields: list[str] = field(default_factory=list)
 
 
@@ -372,6 +432,12 @@ class ResearchBundle:
     competitors: list[ResearchClaim] = field(default_factory=list)
     competitor_analysis: list[ResearchClaim] = field(default_factory=list)
     authority_opportunities: list[ResearchClaim] = field(default_factory=list)
+    brand_presence: list[ResearchClaim] = field(default_factory=list)
+    # Cited evidence of where the brand is already visible online (directories, social
+    # profiles, press) - SEO_RULES.md Section 5 "Authority (Basic MVP)" Brand Presence check.
+    # Domain Authority / Backlink Summary are marked optional in that section and are
+    # deliberately NOT implemented here: no free, verified data source exists for them, and
+    # guessing a number would violate the report's "never invent backlinks" rule.
 
     local_demand: list[ResearchClaim] = field(default_factory=list)
     # Empty unless the site was classified as local/service-area with a known region

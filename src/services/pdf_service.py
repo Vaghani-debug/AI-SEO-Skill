@@ -20,8 +20,8 @@ included in the reportlab package.  The conversion pipeline is:
         ↓  SimpleDocTemplate.build()
     PDF file on disk
 
-The MVP prioritises readability over polished branding.  Tables and
-complex nested formatting are simplified rather than reproduced exactly.
+The MVP prioritises readability over polished branding.  Complex nested
+formatting inside list items is simplified rather than reproduced exactly.
 
 Public interface
 ----------------
@@ -54,6 +54,8 @@ from reportlab.platypus import (
     Paragraph,        # A block of text with a ParagraphStyle applied
     SimpleDocTemplate,  # The simplest Platypus document builder
     Spacer,           # Empty vertical space between elements
+    Table,            # Renders Markdown tables as real grid-aligned tables
+    TableStyle,       # Grid lines, header shading, and padding for Table
 )
 
 from src.config import Settings  # Settings provides the reports directory path
@@ -69,6 +71,18 @@ _NAVY: colors.HexColor = colors.HexColor("#0f3460")   # Brand dark navy — used
 _DARK: colors.HexColor = colors.HexColor("#1a1a2e")   # Near-black body text colour
 _GREY: colors.HexColor = colors.HexColor("#6b7280")   # Muted grey for secondary text
 _RULE: colors.HexColor = colors.HexColor("#dde3ec")   # Light blue-grey for horizontal rules
+_TABLE_HEADER_BG: colors.HexColor = colors.HexColor("#e8edf5")  # Light navy tint for header row
+_TABLE_ROW_ALT_BG: colors.HexColor = colors.HexColor("#f7f9fc")  # Faint stripe for alternate rows
+_TABLE_GRID_COLOR: colors.HexColor = colors.HexColor("#c7d0dd")  # Table grid line colour
+
+# Text-heavy columns (SEO Notes, Recommendation, etc.) get more width than short ones
+_WIDE_TABLE_COLUMN_KEYWORDS: tuple[str, ...] = (
+    "note", "recommend", "impact", "issue", "description", "content", "detail",
+    "strength", "weakness", "why it matters",
+)
+
+# Usable table width — matches the 20mm left/right margins set in generate_pdf()
+_TABLE_WIDTH: float = A4[0] - 40 * mm
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +343,8 @@ def _markdown_to_flowables(markdown_text: str, styles: dict[str, ParagraphStyle]
       - Ordered lists (1. item)
       - Horizontal rules (---)
       - Blockquotes (> text)
-      - Tables (simplified: headings only, no complex cell formatting)
+      - Tables (rendered as real grid-aligned ReportLab Tables, with per-cell
+        text wrapping and bullet-list cell content)
 
     Unsupported elements are converted to plain paragraphs so nothing is lost.
 
@@ -467,20 +482,7 @@ def _convert_element(element: Tag, styles: dict[str, ParagraphStyle]) -> list:
     # --- Tables -------------------------------------------------------------
 
     if tag == "table":
-        # Simplified table: rendered as consecutive indented paragraphs
-        # Full table rendering requires reportlab.platypus.Table which is complex
-        # for the MVP; we fall back to plain text rows instead of crashing
-        result = []
-        for row in element.find_all("tr"):
-            cells = row.find_all(["th", "td"])  # Find all header or data cells
-            if cells:
-                row_text = " | ".join(
-                    _escape_xml(cell.get_text(strip=True))
-                    for cell in cells
-                )
-                style = styles["table_header"] if cells[0].name == "th" else styles["table_cell"]
-                result.append(Paragraph(row_text, style))
-        return result if result else []
+        return _build_table_flowables(element, styles)
 
     # --- Fallback -----------------------------------------------------------
 
@@ -490,6 +492,133 @@ def _convert_element(element: Tag, styles: dict[str, ParagraphStyle]) -> list:
         return [Paragraph(fallback_text, styles["body"])]
 
     return []  # No content to render
+
+
+# ---------------------------------------------------------------------------
+# Table helpers
+# ---------------------------------------------------------------------------
+
+def _build_table_flowables(table_element: Tag, styles: dict[str, ParagraphStyle]) -> list:
+    """
+    Convert an HTML <table> element to a real ReportLab Table flowable.
+
+    Each cell is rendered as its own Paragraph so text wraps naturally within
+    its column and inline formatting (bold, links, bullet lists) survives,
+    instead of flattening every row to a single " | "-joined text line.
+
+    Args:
+        table_element: The <table> BeautifulSoup Tag.
+        styles: The style dictionary.
+
+    Returns:
+        List containing the Table flowable (plus trailing spacer), or an
+        empty list if the table has no renderable rows.
+    """
+    data: list[list[Paragraph]] = []
+    header_texts: list[str] = []
+
+    for row in table_element.find_all("tr"):
+        cells = row.find_all(["th", "td"])
+        if not cells:
+            continue
+
+        is_header = cells[0].name == "th"
+        cell_style = styles["table_header"] if is_header else styles["table_cell"]
+        data.append([Paragraph(_cell_content_to_html(cell), cell_style) for cell in cells])
+
+        if is_header and not header_texts:
+            header_texts = [cell.get_text(strip=True) for cell in cells]
+
+    if not data:
+        return []
+
+    column_count = len(data[0])
+    col_widths = _compute_column_widths(header_texts or [""] * column_count)
+
+    table = Table(data, colWidths=col_widths, repeatRows=1 if header_texts else 0)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), _TABLE_HEADER_BG),
+        ("GRID", (0, 0), (-1, -1), 0.5, _TABLE_GRID_COLOR),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _TABLE_ROW_ALT_BG]),
+    ]))
+
+    return [table, Spacer(1, 3 * mm)]
+
+
+def _compute_column_widths(header_texts: list[str]) -> list[float]:
+    """
+    Compute proportional column widths so text-heavy columns (SEO Notes,
+    Recommendation, Business Impact, etc.) get more room than short columns
+    (row index, short labels).
+
+    Args:
+        header_texts: The header cell text for each column, in order.
+
+    Returns:
+        List of column widths in points, summing to _TABLE_WIDTH.
+    """
+    weights: list[float] = []
+    for text in header_texts:
+        lowered = text.lower()
+        if len(lowered) <= 3:
+            weights.append(0.6)  # e.g. "#" / "#Index"
+        elif any(keyword in lowered for keyword in _WIDE_TABLE_COLUMN_KEYWORDS):
+            weights.append(2.2)
+        else:
+            weights.append(1.0)
+
+    total_weight = sum(weights)
+    return [_TABLE_WIDTH * weight / total_weight for weight in weights]
+
+
+def _cell_content_to_html(cell: Tag) -> str:
+    """
+    Convert a <td>/<th> cell's inner content to ReportLab Paragraph HTML.
+
+    Cells normally hold plain inline text, handled via _inline_to_html().
+    Cells requiring multiple points (SEO Notes, Recommendation, etc.) use a
+    nested <ul>/<ol> bullet list instead — since a Table cell's Paragraph
+    cannot host a nested ListFlowable, each <li> is rendered as its own
+    "• text" line joined by <br/>.
+
+    Args:
+        cell: The <td> or <th> BeautifulSoup Tag.
+
+    Returns:
+        HTML string suitable for a ReportLab Paragraph.
+    """
+    list_children = [
+        child for child in cell.children
+        if isinstance(child, Tag) and child.name.lower() in ("ul", "ol")
+    ]
+    if not list_children:
+        html = _inline_to_html(cell)
+        return html if html.strip() else "&nbsp;"
+
+    block_parts: list[str] = []
+    for child in cell.children:
+        if isinstance(child, Tag) and child.name.lower() in ("ul", "ol"):
+            ordered = child.name.lower() == "ol"
+            items = child.find_all("li", recursive=False)
+            block_parts.extend(
+                f"{index + 1}. {_inline_to_html(li)}" if ordered else f"\u2022 {_inline_to_html(li)}"
+                for index, li in enumerate(items)
+            )
+        elif isinstance(child, Tag):
+            text = _inline_to_html(child)
+            if text.strip():
+                block_parts.append(text)
+        else:
+            text = _escape_xml(str(child))
+            if text.strip():
+                block_parts.append(text)
+
+    return "<br/>".join(block_parts) if block_parts else "&nbsp;"
 
 
 # ---------------------------------------------------------------------------
