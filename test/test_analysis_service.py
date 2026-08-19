@@ -12,10 +12,16 @@ Run with:
     pytest test/test_analysis_service.py -v
 """
 
-from src.services.analysis_service import analyze_site
+from src.services.analysis_service import (
+    analyze_site,
+    build_homepage_element_rows,
+    build_page_seo_notes,
+    build_priority_page_row,
+)
 from src.services.audit_models import (
     ImageInfo,
     PageEvidence,
+    PageReportRow,
     PageType,
     PerformanceEvidence,
     RobotsTxtEvidence,
@@ -45,6 +51,7 @@ def _make_page(
     schema_types: list[str] | None = None,
     internal_links: list[str] | None = None,
     images: list[ImageInfo] | None = None,
+    attempt_count: int = 1,
 ) -> PageEvidence:
     return PageEvidence(
         url=url,
@@ -62,6 +69,7 @@ def _make_page(
         schema_types=schema_types if schema_types is not None else ["Organization"],
         internal_links=internal_links if internal_links is not None else ["https://example.com/about"],
         images=images if images is not None else [],
+        attempt_count=attempt_count,
     )
 
 
@@ -169,6 +177,33 @@ class TestTechnicalSeoChecks:
         result = analyze_site(site)
         assert any("HTTP 500" in f.title for f in result.findings)
 
+    def test_confirmed_non_200_homepage_status_is_critical(self) -> None:
+        # attempt_count > 1 means the failure persisted across retries — confirmed.
+        site = _make_site(homepage=_make_page(http_status=500, attempt_count=3))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "HTTP 500" in f.title)
+        assert finding.severity.value == "Critical"
+        assert "unconfirmed" not in finding.title.lower()
+        assert finding.score_deduction == 30.0
+
+    def test_unretried_transient_homepage_status_is_neutral(self) -> None:
+        # attempt_count == 1 on a retry-eligible status means it was never confirmed.
+        site = _make_site(homepage=_make_page(http_status=503, attempt_count=1))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "HTTP 503" in f.title)
+        assert "unconfirmed" in finding.title.lower()
+        assert finding.severity.value == "Medium"
+        assert "immediately" not in finding.recommendation.lower()
+        assert finding.score_deduction == 10.0
+
+    def test_unretried_real_404_homepage_status_stays_critical(self) -> None:
+        # 404 isn't retry-eligible, so a single observation is still fully confirmed.
+        site = _make_site(homepage=_make_page(http_status=404, attempt_count=1))
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "HTTP 404" in f.title)
+        assert finding.severity.value == "Critical"
+        assert "unconfirmed" not in finding.title.lower()
+
     def test_missing_robots_txt_flagged(self) -> None:
         site = _make_site(robots_txt=None)
         result = analyze_site(site)
@@ -208,6 +243,41 @@ class TestTechnicalSeoChecks:
         finding = next(f for f in result.findings if "noindex" in f.title.lower())
         assert finding.severity.value == "Critical"
         assert finding.score_deduction == 50.0
+
+
+class TestSampledPageHttpStatusChecks:
+
+    def test_confirmed_non_200_sampled_pages_flagged_high(self) -> None:
+        site = _make_site(sampled_pages=[
+            _make_page(url="https://example.com/a", http_status=500, attempt_count=3),
+            _make_page(url="https://example.com/b", http_status=404, attempt_count=1),
+        ])
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "confirmed non-200" in f.title.lower())
+        assert finding.severity.value == "High"
+        assert set(finding.evidence_urls) == {"https://example.com/a", "https://example.com/b"}
+
+    def test_unconfirmed_transient_sampled_pages_flagged_low_and_neutral(self) -> None:
+        site = _make_site(sampled_pages=[
+            _make_page(url="https://example.com/a", http_status=503, attempt_count=1),
+        ])
+        result = analyze_site(site)
+        finding = next(f for f in result.findings if "unconfirmed observation" in f.title.lower())
+        assert finding.severity.value == "Low"
+        assert "immediately" not in finding.recommendation.lower()
+        assert finding.evidence_urls == ["https://example.com/a"]
+
+    def test_no_findings_when_all_sampled_pages_return_200(self) -> None:
+        site = _make_site(sampled_pages=[
+            _make_page(url="https://example.com/a", http_status=200),
+        ])
+        result = analyze_site(site)
+        assert not any("non-200" in f.title.lower() for f in result.findings)
+
+    def test_no_findings_when_no_sampled_pages(self) -> None:
+        site = _make_site(sampled_pages=[])
+        result = analyze_site(site)
+        assert not any("sampled page" in f.title.lower() for f in result.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -519,3 +589,145 @@ class TestOverallScoreComputation:
         result = analyze_site(site)
         technical = next(cs for cs in result.category_scores if cs.category == "Technical SEO")
         assert technical.score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# build_page_seo_notes() — deterministic per-page report notes (Step 6)
+# ---------------------------------------------------------------------------
+
+def _make_row(
+    url: str = "https://example.com/services/hair-transplant",
+    http_status: int | None = 200,
+    attempt_count: int = 1,
+    page_title: str | None = "A Good Page Title Here",
+    meta_description: str | None = "A meta description of reasonable length for testing purposes here.",
+    meta_robots: str | None = None,
+    canonical_url: str | None = "https://example.com/services/hair-transplant",
+    h1_tags: list[str] | None = None,
+    word_count: int | None = 400,
+    schema_types: list[str] | None = None,
+    internal_links: list[str] | None = None,
+) -> PageReportRow:
+    return PageReportRow(
+        url=url,
+        page_type=PageType.SERVICE_PRODUCT,
+        was_crawled=True,
+        http_status=http_status,
+        attempt_count=attempt_count,
+        page_title=page_title,
+        meta_description=meta_description,
+        meta_robots=meta_robots,
+        canonical_url=canonical_url,
+        h1_tags=h1_tags if h1_tags is not None else ["A Heading"],
+        word_count=word_count,
+        schema_types=schema_types if schema_types is not None else ["Service"],
+        internal_links=internal_links if internal_links is not None else ["https://example.com/about"],
+    )
+
+
+class TestBuildPageSeoNotes:
+
+    def test_always_returns_exactly_three_notes(self) -> None:
+        assert len(build_page_seo_notes(_make_row())) == 3
+
+    def test_healthy_page_gets_three_positive_notes(self) -> None:
+        notes = build_page_seo_notes(_make_row())
+        assert "not blocked from indexing" in notes[0]
+        assert "within the recommended range" in notes[1]
+        assert "within the recommended range" in notes[2]
+
+    def test_confirmed_http_status_issue_is_top_priority_and_definitive(self) -> None:
+        row = _make_row(http_status=500, attempt_count=3, page_title=None)
+        notes = build_page_seo_notes(row)
+        assert "HTTP 500" in notes[0]
+        assert "confirmed" in notes[0].lower()
+        assert "unconfirmed" not in notes[0].lower()
+
+    def test_unretried_transient_http_status_is_neutral(self) -> None:
+        row = _make_row(http_status=503, attempt_count=1)
+        notes = build_page_seo_notes(row)
+        assert "HTTP 503" in notes[0]
+        assert "unconfirmed" in notes[0].lower()
+        assert "recheck" in notes[0].lower()
+
+    def test_noindex_flagged_when_status_is_200(self) -> None:
+        row = _make_row(http_status=200, meta_robots="noindex, nofollow")
+        notes = build_page_seo_notes(row)
+        assert "noindex" in notes[0].lower()
+
+    def test_missing_title_is_reported_as_an_issue(self) -> None:
+        row = _make_row(page_title=None)
+        notes = build_page_seo_notes(row)
+        assert notes[0] == "Missing a <title> tag — add a unique, descriptive title."
+
+    def test_missing_description_is_reported_as_an_issue(self) -> None:
+        row = _make_row(meta_description=None)
+        notes = build_page_seo_notes(row)
+        assert notes[0] == "Missing a meta description — add a unique, compelling summary."
+
+    def test_missing_h1_appears_when_earlier_checks_pass(self) -> None:
+        row = _make_row(h1_tags=[])
+        notes = build_page_seo_notes(row)
+        assert any("Missing an H1" in note for note in notes)
+
+    def test_thin_content_appears_when_earlier_checks_pass(self) -> None:
+        row = _make_row(word_count=50)
+        notes = build_page_seo_notes(row)
+        assert any("Only 50 words" in note for note in notes)
+
+    def test_no_schema_appears_only_when_all_earlier_checks_pass(self) -> None:
+        row = _make_row(schema_types=[])
+        notes = build_page_seo_notes(row)
+        assert "No structured data (schema.org) detected on this page." in notes
+
+
+# ---------------------------------------------------------------------------
+# build_homepage_element_rows() / build_priority_page_row() — PART 3 rows (Step 8)
+# ---------------------------------------------------------------------------
+
+class TestBuildHomepageElementRows:
+
+    def test_healthy_page_reports_no_issues(self) -> None:
+        rows = build_homepage_element_rows(_make_row())
+        assert len(rows) == 4
+        for element, current, issue, recommendation in rows:
+            assert issue == "None"
+            assert recommendation == "No change needed."
+            assert current  # every element has a verified current value
+
+    def test_missing_title_reports_missing_with_a_recommendation(self) -> None:
+        rows = build_homepage_element_rows(_make_row(page_title=None))
+        title_row = next(row for row in rows if row[0] == "Title Tag")
+        assert title_row == ("Title Tag", "Missing", "Missing", "Add a unique, descriptive title tag (10-60 characters).")
+
+    def test_multiple_h1s_are_reported_with_current_value(self) -> None:
+        rows = build_homepage_element_rows(_make_row(h1_tags=["First", "Second"]))
+        h1_row = next(row for row in rows if row[0] == "H1 Heading")
+        assert h1_row[1] == "First; Second"
+        assert h1_row[2] == "2 H1 headings found"
+
+    def test_missing_canonical_reports_missing(self) -> None:
+        rows = build_homepage_element_rows(_make_row(canonical_url=None))
+        canonical_row = next(row for row in rows if row[0] == "Canonical Tag")
+        assert canonical_row[1] == "Missing"
+        assert canonical_row[2] == "Missing"
+
+
+class TestBuildPriorityPageRow:
+
+    def test_healthy_page_needs_no_action(self) -> None:
+        url, title_issue, description_issue, heading_issue, recommendation = build_priority_page_row(_make_row())
+        assert title_issue == "None"
+        assert description_issue == "None"
+        assert heading_issue == "None"
+        assert recommendation == "No immediate action needed."
+        assert url == _make_row().url
+
+    def test_multiple_issues_combine_into_one_recommendation(self) -> None:
+        row = _make_row(page_title=None, meta_description=None)
+        _, title_issue, description_issue, heading_issue, recommendation = build_priority_page_row(row)
+        assert title_issue == "Missing"
+        assert description_issue == "Missing"
+        assert heading_issue == "None"
+        assert "title tag" in recommendation.lower()
+        assert "meta description" in recommendation.lower()

@@ -17,17 +17,31 @@ from src.services.audit_models import (
     AuditJob,
     AuditJobStatus,
     CategoryScore,
+    CompetitorGap,
+    CompetitorGapResult,
+    CompetitorOverview,
+    CompetitorResearchResult,
     EffortLevel,
     Finding,
+    InventorySectionData,
+    KeywordOpportunity,
+    KeywordResearchResult,
+    LocationOpportunity,
+    LocationResearchResult,
+    OnPageSectionData,
     PageEvidence,
+    PageReportRow,
     PageType,
     ResearchBundle,
     ResearchClaim,
+    ResearchResult,
+    ResearchStatus,
     ScoreBreakdown,
     SiteEvidence,
     SiteInventory,
     SitemapEntry,
     Severity,
+    TechnicalSectionData,
 )
 
 
@@ -191,26 +205,276 @@ class TestResearchClaim:
         assert claim.confidence == "Estimate"
 
 
+class TestKeywordOpportunity:
+    """Tests for KeywordOpportunity construction and non-fabricated optional fields."""
+
+    def test_estimated_volume_and_target_page_default_to_none(self) -> None:
+        opportunity = KeywordOpportunity(
+            keyword="sourdough bread austin",
+            search_intent="commercial",
+            source_url="https://example-research.com/report",
+            source_title="Example Research Report",
+            retrieved_date="2026-08-04",
+        )
+        assert opportunity.estimated_volume is None
+        assert opportunity.target_page is None
+
+    def test_stores_sourced_estimate_and_target_page(self) -> None:
+        opportunity = KeywordOpportunity(
+            keyword="sourdough bread austin",
+            search_intent="commercial",
+            source_url="https://example-research.com/report",
+            source_title="Example Research Report",
+            retrieved_date="2026-08-04",
+            estimated_volume="1,000-10,000/mo",
+            target_page="/bread",
+        )
+        assert opportunity.estimated_volume == "1,000-10,000/mo"
+        assert opportunity.target_page == "/bread"
+
+
+class TestKeywordResearchResult:
+    """Tests for KeywordResearchResult, the typed-keyword counterpart to ResearchResult."""
+
+    def test_defaults_are_empty_opportunities_and_no_error(self) -> None:
+        result = KeywordResearchResult(status=ResearchStatus.NO_RESULTS)
+        assert result.opportunities == []
+        assert result.error is None
+
+    def test_stores_opportunities_and_status(self) -> None:
+        opportunity = KeywordOpportunity(
+            keyword="sourdough bread austin", search_intent="commercial",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+        )
+        result = KeywordResearchResult(status=ResearchStatus.SUCCESS, opportunities=[opportunity])
+        assert result.opportunities == [opportunity]
+        assert result.status == ResearchStatus.SUCCESS
+
+
 class TestResearchBundle:
     """Tests for the ResearchBundle container that groups research by category."""
 
     def test_defaults_are_all_empty(self) -> None:
         bundle = ResearchBundle()
-        assert bundle.keyword_opportunities == []
+        assert bundle.primary_keywords == []
+        assert bundle.long_tail_keywords == []
         assert bundle.competitors == []
         assert bundle.competitor_analysis == []
         assert bundle.authority_opportunities == []
         assert bundle.local_demand == []
 
     def test_stores_claims_per_category(self) -> None:
-        claim = ResearchClaim(
-            claim="Organic competitor", value="Joe's Bakery",
-            source_url="https://example.com", source_title="Example",
-            retrieved_date="2026-08-04",
+        competitor = CompetitorOverview(
+            competitor_name="Joe's Bakery", website="https://joesbakery.com", focus="Wholesale bread",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
         )
-        bundle = ResearchBundle(competitors=[claim])
-        assert bundle.competitors == [claim]
-        assert bundle.keyword_opportunities == []
+        bundle = ResearchBundle(competitors=[competitor])
+        assert bundle.competitors == [competitor]
+        assert bundle.primary_keywords == []
+        assert bundle.long_tail_keywords == []
+
+
+class TestCompetitorOverview:
+    """Tests for CompetitorOverview construction and non-fabricated optional fields."""
+
+    def test_estimated_authority_defaults_to_none(self) -> None:
+        competitor = CompetitorOverview(
+            competitor_name="Joe's Bakery", website="https://joesbakery.com", focus="Wholesale bread",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+        )
+        assert competitor.estimated_authority is None
+
+    def test_stores_sourced_authority(self) -> None:
+        competitor = CompetitorOverview(
+            competitor_name="Joe's Bakery", website="https://joesbakery.com", focus="Wholesale bread",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+            estimated_authority="High",
+        )
+        assert competitor.estimated_authority == "High"
+
+
+class TestCompetitorResearchResult:
+    """Tests for CompetitorResearchResult, the typed-competitor counterpart to ResearchResult."""
+
+    def test_defaults_are_empty_competitors_and_no_error(self) -> None:
+        result = CompetitorResearchResult(status=ResearchStatus.NO_RESULTS)
+        assert result.competitors == []
+        assert result.error is None
+
+    def test_stores_competitors_and_status(self) -> None:
+        competitor = CompetitorOverview(
+            competitor_name="Joe's Bakery", website="https://joesbakery.com", focus="Wholesale bread",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+        )
+        result = CompetitorResearchResult(status=ResearchStatus.SUCCESS, competitors=[competitor])
+        assert result.competitors == [competitor]
+        assert result.status == ResearchStatus.SUCCESS
+
+
+class TestCompetitorGapResult:
+    """Tests for CompetitorGapResult, the typed-competitor-gap counterpart to ResearchResult."""
+
+    def test_defaults_are_empty_gaps_and_no_error(self) -> None:
+        result = CompetitorGapResult(status=ResearchStatus.NO_RESULTS)
+        assert result.gaps == []
+        assert result.error is None
+
+    def test_stores_gaps_and_status(self) -> None:
+        gap = CompetitorGap(
+            keyword="artisan bread austin", competitor_position="Joe's Bakery ranks #2",
+            your_gap="No dedicated landing page",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+        )
+        result = CompetitorGapResult(status=ResearchStatus.SUCCESS, gaps=[gap])
+        assert result.gaps == [gap]
+        assert result.status == ResearchStatus.SUCCESS
+
+
+class TestLocationOpportunity:
+    """Tests for LocationOpportunity construction and non-fabricated optional fields."""
+
+    def test_estimated_volume_defaults_to_none(self) -> None:
+        opportunity = LocationOpportunity(
+            city_or_region="Austin, TX", primary_keyword="bakery near me", priority="High",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+        )
+        assert opportunity.estimated_volume is None
+
+    def test_stores_sourced_estimate(self) -> None:
+        opportunity = LocationOpportunity(
+            city_or_region="Austin, TX", primary_keyword="bakery near me", priority="High",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+            estimated_volume="1,000-10,000/mo",
+        )
+        assert opportunity.estimated_volume == "1,000-10,000/mo"
+
+
+class TestLocationResearchResult:
+    """Tests for LocationResearchResult, the typed-location counterpart to ResearchResult."""
+
+    def test_defaults_are_empty_opportunities_and_no_error(self) -> None:
+        result = LocationResearchResult(status=ResearchStatus.NO_RESULTS)
+        assert result.opportunities == []
+        assert result.error is None
+
+    def test_stores_opportunities_and_status(self) -> None:
+        opportunity = LocationOpportunity(
+            city_or_region="Austin, TX", primary_keyword="bakery near me", priority="High",
+            source_url="https://example.com", source_title="Example", retrieved_date="2026-08-04",
+        )
+        result = LocationResearchResult(status=ResearchStatus.SUCCESS, opportunities=[opportunity])
+        assert result.opportunities == [opportunity]
+        assert result.status == ResearchStatus.SUCCESS
+
+    def test_insufficient_location_evidence_is_a_distinct_deterministic_status(self) -> None:
+        result = LocationResearchResult(
+            status=ResearchStatus.INSUFFICIENT_LOCATION_EVIDENCE,
+            error="Business appears local/service-area, but no service region could be determined from crawl evidence.",
+        )
+        assert result.opportunities == []
+        assert result.error is not None
+
+
+class TestReportFacingModels:
+    """Tests for the evidence projections consumed by deterministic renderers."""
+
+    def _make_page_row(self, **overrides) -> PageReportRow:
+        defaults = dict(
+            url="https://example.com/",
+            page_type=PageType.CORE,
+            was_crawled=True,
+            http_status=200,
+            page_title="Example",
+        )
+        defaults.update(overrides)
+        return PageReportRow(**defaults)
+
+    def test_page_report_row_preserves_crawl_coverage(self) -> None:
+        crawled = self._make_page_row(h1_tags=["Example"], word_count=450)
+        sitemap_only = self._make_page_row(
+            url="https://example.com/not-crawled",
+            was_crawled=False,
+            http_status=None,
+            page_title=None,
+            source_sitemap="https://example.com/sitemap.xml",
+        )
+
+        assert crawled.was_crawled is True
+        assert crawled.h1_tags == ["Example"]
+        assert sitemap_only.was_crawled is False
+        assert sitemap_only.http_status is None
+        assert sitemap_only.page_title is None
+
+    def test_inventory_defaults_do_not_share_lists(self) -> None:
+        first = InventorySectionData()
+        second = InventorySectionData()
+
+        first.core_pages.append(self._make_page_row())
+
+        assert len(first.core_pages) == 1
+        assert second.core_pages == []
+        assert first.sitemap_only_pages == []
+
+    def test_technical_section_groups_verified_evidence(self) -> None:
+        page = self._make_page_row(schema_types=["Organization"])
+        section = TechnicalSectionData(
+            detected_schema_types=["Organization"],
+            pages=[page],
+        )
+
+        assert section.robots_txt is None
+        assert section.performance is None
+        assert section.detected_schema_types == ["Organization"]
+        assert section.pages == [page]
+
+    def test_on_page_section_requires_homepage(self) -> None:
+        homepage = self._make_page_row()
+        priority_page = self._make_page_row(
+            url="https://example.com/services",
+            page_type=PageType.SERVICE_PRODUCT,
+        )
+        section = OnPageSectionData(homepage=homepage, priority_pages=[priority_page])
+
+        assert section.homepage == homepage
+        assert section.priority_pages == [priority_page]
+        assert section.on_page_findings == []
+        assert section.content_findings == []
+
+
+class TestResearchResult:
+    """Tests for explicit research outcomes used by the future projection layer."""
+
+    def test_status_vocabulary_is_fixed(self) -> None:
+        assert {status.value for status in ResearchStatus} == {
+            "success",
+            "no_results",
+            "parse_failed",
+            "citation_failed",
+            "provider_failed",
+            "insufficient_location_evidence",
+        }
+
+    def test_failure_preserves_reason_without_claims(self) -> None:
+        result = ResearchResult(
+            status=ResearchStatus.CITATION_FAILED,
+            error="Provider citations did not match returned source URLs.",
+        )
+
+        assert result.claims == []
+        assert result.error is not None
+
+    def test_success_stores_verified_claims(self) -> None:
+        claim = ResearchClaim(
+            claim="Organic competitor",
+            value="Example Competitor",
+            source_url="https://competitor.example",
+            source_title="Example Competitor",
+            retrieved_date="2026-08-19",
+        )
+        result = ResearchResult(status=ResearchStatus.SUCCESS, claims=[claim])
+
+        assert result.claims == [claim]
+        assert result.error is None
 
 
 class TestAuditContext:

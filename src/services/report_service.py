@@ -5,16 +5,18 @@ LLM-backed SEO audit report generation service.
 
 Responsibility: take the structured audit evidence produced by
 extractor_service and the guidance context loaded by prompt_loader,
-call the Gemini LLM, and return a completed Markdown SEO audit report.
+call the configured LLM provider via llm_service.generate_text(), and
+return a completed Markdown SEO audit report.
 
-The report_service is the only module that calls the LLM.  All other
-services are deterministic.  Keeping LLM usage isolated here makes it
-easy to audit token usage, swap models, and mock the API in tests.
+The report_service is the only module that calls the LLM (through the
+shared llm_service dispatcher). All other services are deterministic.
+Keeping LLM usage isolated here makes it easy to audit token usage,
+swap models, and mock the API in tests.
 
 Hallucination prevention
 ------------------------
 The evidence package passed to the LLM is the only factual input.
-The system prompt explicitly instructs Gemini to use only verified
+The system prompt explicitly instructs the LLM to use only verified
 evidence and to write ``Could not be verified in this audit.`` for
 every field that was not measurable from static content.
 
@@ -34,10 +36,6 @@ Public interface
 
     assemble_report_markdown(
         sections,
-    ) -> str
-
-    build_source_register(
-        context,
     ) -> str
 
     validate_assembled_report(
@@ -60,7 +58,6 @@ Public interface
     ) -> ReportResult
 """
 
-import asyncio  # asyncio.to_thread runs the synchronous Gemini SDK call in a thread pool
 import logging  # Standard logging — records every LLM call attempt, success, and failure
 import os  # os.makedirs creates the reports/ output directory if it does not exist
 import re  # re.finditer extracts PART headings from the template at runtime
@@ -68,18 +65,28 @@ import uuid  # uuid.uuid4 generates a unique ID for each audit
 from dataclasses import dataclass  # dataclass defines the structured result returned to the caller
 from datetime import datetime, timezone  # datetime.now(timezone.utc) for timezone-aware UTC timestamps
 from pathlib import Path  # Path handles OS-agnostic file paths for report storage
-
-import google.generativeai as genai  # Google Gemini SDK — used when llm_provider=gemini
-from openai import AsyncOpenAI  # OpenAI-compatible client — used when llm_provider=perplexity
+from urllib.parse import urlparse  # Derives a human-readable page name from a URL's path
 
 from src.config import Settings  # Settings provides the API key and model configuration
-from src.services.analysis_service import analyze_site  # Deterministic evidence -> score/finding scoring
+from src.services.analysis_service import (  # Deterministic evidence -> score/finding scoring; per-page report notes/rows
+    analyze_site,
+    build_homepage_element_rows,
+    build_page_seo_notes,
+    build_priority_page_row,
+)
 from src.services.audit_models import (
     AuditContext,
+    CompetitorGap,
+    CompetitorOverview,
     Finding,
+    InventorySectionData,
+    KeywordOpportunity,
+    LocationOpportunity,
+    PageReportRow,
     PerformanceEvidence,
     ResearchBundle,
     ResearchClaim,
+    ResearchStatus,
     ScoreBreakdown,
     Severity,
     SiteEvidence,
@@ -89,7 +96,14 @@ from src.services.extractor_service import (
     RobotsTxtEvidence,  # Robots.txt findings — used in evidence formatting
     SitemapEvidence,    # Sitemap accessibility data — used in evidence formatting
 )
+from src.services.fetch_service import is_transient_status_code  # Shared 429/5xx retry-eligibility rule
+from src.services.llm_service import generate_text  # Provider-neutral dispatcher (Gemini/Perplexity/OpenAI)
 from src.services.prompt_loader import PromptContext  # Loaded guidance files context
+from src.services.report_data_service import (  # Deterministic AuditContext -> section-data projections
+    build_inventory_section_data,
+    build_on_page_section_data,
+    build_technical_section_data,
+)
 from src.services.research_service import classify_local_business, research_site
 
 # Module-level logger
@@ -167,23 +181,6 @@ def _extract_section_body(markdown_report: str, heading_prefix: str) -> str | No
     return match.group(1).strip() if match else None
 
 
-def _replace_source_register_table(section_markdown: str, source_register: str) -> str:
-    """
-    Overwrite SECTION 8.3's "### Source Register Table" body with the
-    deterministically built source_register, discarding whatever table the
-    LLM wrote there (which cannot be trusted to reproduce citations exactly).
-
-    If the heading is missing entirely, append it, so the deterministic
-    register is never silently dropped from the assembled report.
-    """
-    heading = "### Source Register Table"
-    pattern = re.compile(rf"^{re.escape(heading)}[^\n]*\n[\s\S]*?(?=^#{{1,6}} |\Z)", re.MULTILINE)
-    replacement = f"{heading}\n\n{source_register}\n\n"
-    if pattern.search(section_markdown):
-        return pattern.sub(replacement, section_markdown, count=1)
-    return f"{section_markdown.rstrip()}\n\n{replacement}"
-
-
 def _validate_location_section(markdown_report: str) -> list[str]:
     """
     Enforce SECTION 3's conditional rule: exactly one of 3.2 or 3.3 must be
@@ -240,15 +237,22 @@ def _deduplicate_table_rows(markdown_report: str) -> str:
     """
     Drop repeated recommendation rows from every Markdown table in the report.
 
-    Recommendation-style tables (e.g. PART 2.1's Issues Table, PART 3's
-    on-page tables, and SECTION 6.1's 30/60/90-Day Action Plan) can restate the
-    same recommendation under a different timeframe/page across independent
-    section-generation calls. When a table has an "Action"/"Recommendation"/
+    Recommendation-style tables (e.g. PART 2.1's Issues Table and PART 3's
+    on-page tables) can restate the same recommendation for different pages
+    across independent section-generation calls. When a table has an "Action"/"Recommendation"/
     "Recommended" column, rows are deduplicated on that column's value alone
     (the actual repeated advice); otherwise the whole row is compared, as a
     general safety net against exact-duplicate rows in any other table.
+
+    When the table also has a per-row identifier column ("Element", "Page", or
+    "URL" — e.g. PART 3.1's Homepage Elements Table or PART 3.2's Priority
+    Pages Table), the identifier is combined with the recommendation to form
+    the dedup key. Otherwise, two distinct elements/pages that happen to share
+    a generic recommendation such as "No change needed." would be wrongly
+    collapsed into one row, silently dropping real deterministic content.
     """
     dedup_column_names = {"action", "recommendation", "recommended"}
+    identifier_column_names = {"element", "page", "url"}
     output_lines: list[str] = []
     table_buffer: list[str] = []
 
@@ -263,6 +267,10 @@ def _deduplicate_table_rows(markdown_report: str) -> str:
             (index for index, name in enumerate(header_cells) if name in dedup_column_names),
             None,
         )
+        identifier_column_index = next(
+            (index for index, name in enumerate(header_cells) if name in identifier_column_names),
+            None,
+        )
 
         seen: set[str] = set()
         deduplicated_rows: list[str] = []
@@ -273,6 +281,8 @@ def _deduplicate_table_rows(markdown_report: str) -> str:
                     deduplicated_rows.append(row)  # malformed row width — not this helper's concern
                     continue
                 key = cells[dedup_column_index].strip().lower()
+                if identifier_column_index is not None and identifier_column_index < len(cells):
+                    key = f"{cells[identifier_column_index].strip().lower()}|{key}"
             else:
                 key = row.strip().lower()
 
@@ -298,17 +308,34 @@ def _deduplicate_table_rows(markdown_report: str) -> str:
     return "\n".join(output_lines)
 
 
-def _validate_citation_columns(markdown_report: str) -> list[str]:
+def _validate_citation_columns(markdown_report: str, *, exclude_table_headings: frozenset[str] = frozenset()) -> list[str]:
     """
     Flag data rows in Source/Retrieved-cited tables (PARTS 5-7) that omit a citation.
 
     Any table whose header includes both a "Source" and "Retrieved" column
     must not contain a data row with an empty value in either column — see
     the External Research Citation Rules in seo_audit.prompt.md.
+
+    Args:
+        exclude_table_headings: "### {heading}" table headings to skip validating —
+            used only for the per-group pre-injection retry check
+            (see generate_report_sections()), where these tables are always
+            force-overwritten by a verified renderer regardless of what the
+            LLM drafted, so a citation gap there is never a repairable
+            narrative issue worth asking the model to fix.
     """
+    excluded_tables: set[tuple[str, ...]] = {
+        tuple(table)
+        for heading in exclude_table_headings
+        for table in _find_table_after_heading(markdown_report, heading)
+    }
+
     issues: list[str] = []
 
     for table in _find_table_blocks(markdown_report):
+        if tuple(table) in excluded_tables:
+            continue
+
         header_cells: list[str] = [cell.lower() for cell in _split_table_row(table[0])]
         if "source" not in header_cells or "retrieved" not in header_cells:
             continue
@@ -356,7 +383,7 @@ async def build_audit_context(
     Args:
         normalized_url: The website URL that was audited.
         site_evidence: Verified evidence from crawl_service/extractor_service.
-        settings: Application settings (Perplexity research configuration).
+        settings: Application settings (LLM provider and research configuration).
         audit_id: Pre-generated ID to reuse (e.g. from an already-created
             job record); a new one is generated if not supplied.
 
@@ -393,10 +420,7 @@ async def build_audit_context(
 # ---------------------------------------------------------------------------
 # Fixed, deterministic grouping of MASTER_REPORT_STRUCTURE.md PART/SECTION
 # headings into section-generation calls, so no single call has to hold the
-# entire site's evidence in context. The executive summary is generated last,
-# from the score/findings/research already assembled for every other group,
-# but assemble_report_markdown() splices it back in as SECTION 7 — immediately
-# before SECTION 8 (Methodology) — rather than appending it at generation order.
+# entire site's evidence in context.
 
 _SECTION_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("site_inventory", ("PART 1",)),
@@ -404,9 +428,13 @@ _SECTION_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("keyword_strategy", ("SECTION 1",)),
     ("competitor_analysis", ("SECTION 2",)),
     ("location_or_market_expansion", ("SECTION 3",)),
-    ("structured_data_and_execution", ("SECTION 4", "SECTION 5", "SECTION 6", "SECTION 8")),
-    ("executive_summary", ("SECTION 7",)),
+    ("structured_data_and_off_page", ("SECTION 4", "SECTION 5")),
 )
+
+# Groups whose ENTIRE template content already has a deterministic Python
+# renderer (Steps 6-8) - these skip the LLM call entirely, so the model never
+# has any opportunity to invent or rewrite a technical/on-page fact.
+_DETERMINISTIC_ONLY_GROUPS: frozenset[str] = frozenset({"technical_and_onpage"})
 
 
 def _format_findings(findings: list[Finding], empty_message: str) -> str:
@@ -438,6 +466,69 @@ def _format_claims(claims: list[ResearchClaim], empty_message: str) -> str:
             f"- **{claim.claim}**: {claim.value} "
             f"(Source: [{claim.source_title}]({claim.source_url}), retrieved {claim.retrieved_date}, "
             f"{claim.confidence})"
+        )
+    return "\n".join(lines)
+
+
+def _format_keyword_opportunities(opportunities: list[KeywordOpportunity], empty_message: str) -> str:
+    """Render KeywordOpportunity row(s) as a Markdown list with mandatory citations, or a clear empty message."""
+    if not opportunities:
+        return empty_message
+
+    lines: list[str] = []
+    for opportunity in opportunities:
+        volume = opportunity.estimated_volume or "No sourced estimate"
+        target_page = opportunity.target_page or "No clear existing page match"
+        lines.append(
+            f"- **{opportunity.keyword}** (Intent: {opportunity.search_intent}, Est. volume: {volume}, "
+            f"Target page: {target_page}) "
+            f"(Source: [{opportunity.source_title}]({opportunity.source_url}), retrieved {opportunity.retrieved_date})"
+        )
+    return "\n".join(lines)
+
+
+def _format_competitor_overview(competitors: list[CompetitorOverview], empty_message: str) -> str:
+    """Render CompetitorOverview row(s) as a Markdown list with mandatory citations, or a clear empty message."""
+    if not competitors:
+        return empty_message
+
+    lines: list[str] = []
+    for competitor in competitors:
+        authority = competitor.estimated_authority or "No sourced estimate"
+        lines.append(
+            f"- **{competitor.competitor_name}** ({competitor.website}) - Focus: {competitor.focus}, "
+            f"Estimated authority: {authority} "
+            f"(Source: [{competitor.source_title}]({competitor.source_url}), retrieved {competitor.retrieved_date})"
+        )
+    return "\n".join(lines)
+
+
+def _format_competitor_gaps(gaps: list[CompetitorGap], empty_message: str) -> str:
+    """Render CompetitorGap row(s) as a Markdown list with mandatory citations, or a clear empty message."""
+    if not gaps:
+        return empty_message
+
+    lines: list[str] = []
+    for gap in gaps:
+        lines.append(
+            f"- **{gap.keyword}**: {gap.competitor_position} — Your gap: {gap.your_gap} "
+            f"(Source: [{gap.source_title}]({gap.source_url}), retrieved {gap.retrieved_date})"
+        )
+    return "\n".join(lines)
+
+
+def _format_location_opportunities(opportunities: list[LocationOpportunity], empty_message: str) -> str:
+    """Render LocationOpportunity row(s) as a Markdown list with mandatory citations, or a clear empty message."""
+    if not opportunities:
+        return empty_message
+
+    lines: list[str] = []
+    for opportunity in opportunities:
+        volume = opportunity.estimated_volume or "No sourced estimate"
+        lines.append(
+            f"- **{opportunity.city_or_region}** - {opportunity.primary_keyword} (Est. volume: {volume}, "
+            f"Priority: {opportunity.priority}) "
+            f"(Source: [{opportunity.source_title}]({opportunity.source_url}), retrieved {opportunity.retrieved_date})"
         )
     return "\n".join(lines)
 
@@ -478,6 +569,437 @@ def _format_site_inventory_evidence(site_evidence: SiteEvidence) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Deterministic PART 1 inventory table rendering (Step 6 — Phase 3)
+# ---------------------------------------------------------------------------
+# Pure Markdown renderers built from InventorySectionData (report_data_service.py)
+# instead of asking the LLM to author page rows/notes from thin evidence text.
+# Wiring these into generate_report_sections() in place of the LLM's own PART 1
+# table output is Step 9's job, not this module's rendering functions.
+
+
+def _derive_page_name(url: str) -> str:
+    """Derive a human-readable page name from a URL's path, e.g. /services/hair-transplant/ -> Hair Transplant."""
+    path = urlparse(url).path.strip("/")
+    if not path:
+        return "Homepage"
+    slug = path.rsplit("/", 1)[-1]
+    words = [word for word in re.split(r"[-_]+", slug) if word]
+    return " ".join(word.capitalize() for word in words) if words else "Homepage"
+
+
+def _escape_table_cell(value: str) -> str:
+    """Escape pipe characters so a cell value can never break a Markdown table row."""
+    return value.replace("|", "\\|")
+
+
+def _render_seo_notes_cell(page: PageReportRow) -> str:
+    """Render one crawled page's three deterministic SEO notes as the required inline HTML bullet list."""
+    notes = build_page_seo_notes(page)
+    return "<ul>" + "".join(f"<li>{_escape_table_cell(note)}</li>" for note in notes) + "</ul>"
+
+
+def _render_page_inventory_table(rows: list[PageReportRow]) -> str:
+    """
+    Render one "#Index | Page Name | URL | Title Tag | SEO Notes" Markdown
+    table for a list of crawled PageReportRow(s).
+
+    Only pass crawled rows (Core Pages or Subpages) — sitemap-only rows must
+    never appear here, since they have no verified title or per-page notes to render.
+    """
+    lines = [
+        "| #Index | Page Name (derived from URL) | URL | Title Tag | SEO Notes |",
+        "|--------|-------------------------------|-----|-----------|-----------|",
+    ]
+    for index, page in enumerate(rows, start=1):
+        page_name = _derive_page_name(page.url)
+        title_cell = _escape_table_cell(page.page_title) if page.page_title else "Missing"
+        notes_cell = _render_seo_notes_cell(page)
+        lines.append(f"| {index} | {page_name} | {page.url} | {title_cell} | {notes_cell} |")
+    return "\n".join(lines)
+
+
+def render_core_pages_table(inventory: InventorySectionData) -> str:
+    """Render PART 1.1's Core Pages Table deterministically from projected rows."""
+    return _render_page_inventory_table(inventory.core_pages)
+
+
+def render_subpages_table(inventory: InventorySectionData) -> str:
+    """Render PART 1.2's Subpages Table deterministically from projected rows."""
+    return _render_page_inventory_table(inventory.subpages)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic PART 2 factual body rendering (Step 7 — Phase 3)
+# ---------------------------------------------------------------------------
+# Pure Markdown renderers for PART 2's factual bodies (robots, sitemap, PageSpeed,
+# indexability/crawlability, schema, and the Critical/High issues table), built from
+# TechnicalSectionData (report_data_service.py). LLM prose may still explain impact,
+# but the yes/no status and any technical issue must come from these functions, not
+# be decided or invented by the model. Wiring these into generate_report_sections()
+# in place of the LLM's own PART 2 output is Step 9's job, not this module's rendering
+# functions.
+
+
+def render_critical_high_issues_table(findings: list[Finding]) -> str:
+    """Render PART 2.1's Issues Table directly from Critical/High severity Finding objects."""
+    issues = [finding for finding in findings if finding.severity in (Severity.CRITICAL, Severity.HIGH)]
+    lines = [
+        "| Issue | Severity | Business Impact | Recommendation |",
+        "|-------|----------|------------------|-----------------|",
+    ]
+    if not issues:
+        lines.append("| No Critical or High severity issues were found. | — | — | — |")
+        return "\n".join(lines)
+    for finding in issues:
+        lines.append(
+            f"| {_escape_table_cell(finding.title)} | {finding.severity.value} | "
+            f"{_escape_table_cell(finding.business_impact)} | {_escape_table_cell(finding.recommendation)} |"
+        )
+    return "\n".join(lines)
+
+
+def render_robots_txt_section(robots: RobotsTxtEvidence | None) -> str:
+    """Render PART 2.2's robots.txt status/directives deterministically."""
+    if robots is None:
+        return "Robots.txt evidence was not collected for this audit."
+    lines = [f"- Accessible: {'Yes' if robots.is_accessible else 'No'} (HTTP {robots.http_status})"]
+    if robots.blocks_root_path:
+        lines.append("- **Blocks the entire site from crawling** (a `Disallow: /` rule applies to all robots).")
+    lines.append(
+        f"- Disallow rules: {', '.join(robots.disallow_rules)}" if robots.disallow_rules
+        else "- No Disallow rules apply to all robots."
+    )
+    if robots.allow_rules:
+        lines.append(f"- Allow rules: {', '.join(robots.allow_rules)}")
+    lines.append(
+        f"- Sitemap(s) declared in robots.txt: {', '.join(robots.sitemap_urls)}" if robots.sitemap_urls
+        else "- No Sitemap directive was found in robots.txt."
+    )
+    return "\n".join(lines)
+
+
+def render_sitemap_section(sitemaps: list[SitemapEvidence]) -> str:
+    """Render PART 2.3's accessible sitemap URLs and discovered counts deterministically."""
+    if not sitemaps:
+        return "No XML sitemap was found or verified for this site."
+    lines: list[str] = []
+    for sitemap in sitemaps:
+        if sitemap.is_accessible:
+            lines.append(f"- {sitemap.url}: accessible (HTTP {sitemap.http_status}), {sitemap.url_count} URL(s) listed.")
+        else:
+            lines.append(f"- {sitemap.url}: not accessible (HTTP {sitemap.http_status}).")
+    return "\n".join(lines)
+
+
+_PERFORMANCE_SOURCE_LABELS = {
+    "field": "real-user field data (Chrome UX Report)",
+    "lab": "lab-simulated data (a single Lighthouse run)",
+}
+
+
+def render_pagespeed_section(performance: PerformanceEvidence | None) -> str:
+    """Render PART 2.4's PageSpeed source and exact available metrics deterministically."""
+    if performance is None or not performance.is_available:
+        return "PageSpeed Insights data was not available for this audit."
+
+    source_label = _PERFORMANCE_SOURCE_LABELS.get(performance.data_source, performance.data_source or "an unspecified source")
+    lines = [f"- Data source: {source_label}, audited URL: {performance.source_url}"]
+    metric_lines = []
+    if performance.performance_score is not None:
+        metric_lines.append(f"- Performance score: {performance.performance_score:.0f}/100")
+    if performance.largest_contentful_paint_ms is not None:
+        metric_lines.append(f"- Largest Contentful Paint (LCP): {performance.largest_contentful_paint_ms / 1000:.1f}s")
+    if performance.cumulative_layout_shift is not None:
+        metric_lines.append(f"- Cumulative Layout Shift (CLS): {performance.cumulative_layout_shift:.2f}")
+    if performance.interaction_to_next_paint_ms is not None:
+        metric_lines.append(f"- Interaction to Next Paint (INP): {performance.interaction_to_next_paint_ms:.0f}ms")
+    lines.extend(metric_lines if metric_lines else ["- No individual Core Web Vitals metrics were available."])
+    return "\n".join(lines)
+
+
+def render_indexability_section(pages: list[PageReportRow], robots: RobotsTxtEvidence | None) -> str:
+    """Render PART 2.5's indexability/crawlability state deterministically from verified evidence."""
+    lines: list[str] = []
+    if robots is not None and robots.blocks_root_path:
+        lines.append("- **Crawlability: Blocked** — robots.txt disallows all robots from the entire site.")
+    else:
+        lines.append("- Crawlability: Not blocked at the site level by robots.txt.")
+
+    noindex_pages = [page for page in pages if page.meta_robots and "noindex" in page.meta_robots.lower()]
+    if noindex_pages:
+        lines.append(f"- Indexability: {len(noindex_pages)} of {len(pages)} analyzed page(s) carry a noindex directive.")
+        lines.extend(f"  - {page.url}" for page in noindex_pages)
+    else:
+        lines.append(f"- Indexability: None of the {len(pages)} analyzed page(s) are blocked by a noindex directive.")
+    return "\n".join(lines)
+
+
+def render_schema_section(schema_types: list[str]) -> str:
+    """Render PART 2.6's detected structured data types deterministically."""
+    if not schema_types:
+        return "No structured data (schema.org) was detected on any analyzed page."
+    return "- Detected schema types: " + ", ".join(schema_types)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic PART 3 on-page table rendering (Step 8 — Phase 3)
+# ---------------------------------------------------------------------------
+# Pure Markdown renderers for PART 3's homepage/priority-page tables and content-
+# quality summary, built from OnPageSectionData (report_data_service.py). Values,
+# issue labels, and recommendations come only from analysis_service's deterministic
+# element checks — never invented by an LLM. Wiring these into
+# generate_report_sections() in place of the LLM's own PART 3 output is Step 9's
+# job, not this module's rendering functions.
+
+
+def render_homepage_elements_table(homepage: PageReportRow) -> str:
+    """Render PART 3.1's Homepage Elements Table deterministically."""
+    lines = [
+        "| Element | Current | Issue | Recommended |",
+        "|---------|---------|-------|-------------|",
+    ]
+    for element, current, issue, recommendation in build_homepage_element_rows(homepage):
+        lines.append(
+            f"| {element} | {_escape_table_cell(current)} | {_escape_table_cell(issue)} | "
+            f"{_escape_table_cell(recommendation)} |"
+        )
+    return "\n".join(lines)
+
+
+def render_priority_pages_table(priority_pages: list[PageReportRow]) -> str:
+    """Render PART 3.2's Priority Pages Table deterministically."""
+    lines = [
+        "| Page | Title Tag Issue | Meta Description Issue | Heading Issue | Recommendation |",
+        "|------|------------------|-------------------------|----------------|-----------------|",
+    ]
+    if not priority_pages:
+        lines.append("| No priority pages were analyzed. | — | — | — | — |")
+        return "\n".join(lines)
+    for page in priority_pages:
+        url, title_issue, description_issue, heading_issue, recommendation = build_priority_page_row(page)
+        lines.append(
+            f"| {url} | {_escape_table_cell(title_issue)} | {_escape_table_cell(description_issue)} | "
+            f"{_escape_table_cell(heading_issue)} | {_escape_table_cell(recommendation)} |"
+        )
+    return "\n".join(lines)
+
+
+def render_content_quality_section(content_findings: list[Finding]) -> str:
+    """Render PART 3.3's Content Quality Assessment deterministically, with exact counts and affected URLs."""
+    if not content_findings:
+        return "No content quality issues were found across the analyzed pages."
+    lines: list[str] = []
+    for finding in content_findings:
+        lines.append(f"- **{finding.title}**: {finding.description}")
+        lines.append(f"  - Recommendation: {finding.recommendation}")
+        affected = ", ".join(finding.evidence_urls) if finding.evidence_urls else "Site-wide"
+        lines.append(f"  - Affected URLs: {affected}")
+    return "\n".join(lines)
+
+
+def _render_technical_and_onpage_section(context: AuditContext) -> str:
+    """
+    Render the entire "technical_and_onpage" group (PART 2 + PART 3) from
+    verified evidence, using the Step 6-8 renderers for every subsection.
+
+    Every heading in this group already maps 1:1 to a deterministic renderer,
+    so this group is never sent to the LLM (see _DETERMINISTIC_ONLY_GROUPS) -
+    the model has no chance to invent a technical/on-page fact or rewrite a
+    deterministic table here.
+    """
+    technical = build_technical_section_data(context)
+    on_page = build_on_page_section_data(context)
+
+    return (
+        "# PART 2: TECHNICAL SEO AUDIT\n\n"
+        "## 2.1 Critical & High Priority Issues\n\n"
+        "### Issues Table\n\n"
+        f"{render_critical_high_issues_table(technical.findings)}\n\n"
+        "## 2.2 Robots.txt Analysis\n\n"
+        f"{render_robots_txt_section(technical.robots_txt)}\n\n"
+        "## 2.3 XML Sitemap Analysis\n\n"
+        f"{render_sitemap_section(technical.sitemaps)}\n\n"
+        "## 2.4 Core Web Vitals & Page Speed\n\n"
+        f"{render_pagespeed_section(technical.performance)}\n\n"
+        "## 2.5 Indexability & Crawlability\n\n"
+        f"{render_indexability_section(technical.pages, technical.robots_txt)}\n\n"
+        "## 2.6 Structured Data Status\n\n"
+        f"{render_schema_section(technical.detected_schema_types)}\n\n"
+        "---\n\n"
+        "# PART 3: ON-PAGE & CONTENT AUDIT\n\n"
+        "## 3.1 Homepage On-Page Review\n\n"
+        "### Homepage Elements Table\n\n"
+        f"{render_homepage_elements_table(on_page.homepage)}\n\n"
+        "## 3.2 Priority Pages On-Page Review\n\n"
+        "### Priority Pages Table\n\n"
+        f"{render_priority_pages_table(on_page.priority_pages)}\n\n"
+        "## 3.3 Content Quality Assessment\n\n"
+        f"{render_content_quality_section(on_page.content_findings)}"
+    )
+
+
+def _replace_heading_block(markdown: str, heading_text: str, replacement: str) -> str:
+    """
+    Force everything under a "### {heading_text}" heading (up to the next
+    heading) to `replacement`, regardless of what is already there.
+
+    Appends the heading and `replacement` at the end of `markdown` if the
+    heading is missing entirely, so a deterministic table is never silently
+    dropped because the model omitted its heading.
+    """
+    pattern = re.compile(rf"(^### {re.escape(heading_text)}\s*\n)([\s\S]*?)(?=^#{{1,3}} |\Z)", re.MULTILINE)
+    if pattern.search(markdown):
+        return pattern.sub(lambda m: f"{m.group(1)}{replacement}\n\n", markdown, count=1)
+    return f"{markdown.rstrip()}\n\n### {heading_text}\n\n{replacement}\n"
+
+
+def _inject_inventory_tables(section_markdown: str, core_pages_table: str, subpages_table: str) -> str:
+    """
+    Force PART 1.1's Core Pages Table and 1.2's Subpages Table to the
+    verified, deterministically rendered tables, regardless of what the
+    model wrote under those headings - the model is never trusted to author
+    or faithfully reproduce these tables.
+    """
+    section_markdown = _replace_heading_block(section_markdown, "Core Pages Table", core_pages_table)
+    return _replace_heading_block(section_markdown, "Subpages Table", subpages_table)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic Section 1-3 opportunity table rendering (Step 14 — Phase 4)
+# ---------------------------------------------------------------------------
+# Pure renderers for SECTION 1/2/3's citation-bearing opportunity tables,
+# built only from accepted (citation-verified) typed research rows - never
+# from the LLM's own table authorship. Narrative subsections (1.3 Keyword-to-
+# Page Mapping, 3.1 Applicability Assessment, 3.3 Audience & Market Expansion
+# narrative) remain genuine LLM judgment and are left untouched; only the
+# fixed-column citation tables are overwritten via _replace_heading_block().
+
+# Statuses meaning the research attempt itself did not complete cleanly -
+# an empty table here must never read the same as a genuine zero-result search.
+_RESEARCH_UNAVAILABLE_STATUSES: frozenset[ResearchStatus] = frozenset(
+    {ResearchStatus.PARSE_FAILED, ResearchStatus.CITATION_FAILED, ResearchStatus.PROVIDER_FAILED}
+)
+
+
+def _render_research_status_note(status: ResearchStatus | None) -> str:
+    """
+    A concise, honest narrative appended below an opportunity table when it
+    has no rows - distinguishing a genuine zero-result search (no_results)
+    from a research-availability gap (parse/citation/provider failure) so
+    neither is ever read as "no market opportunity exists".
+    """
+    if status == ResearchStatus.NO_RESULTS:
+        return (
+            "\n\n*Bounded, cited research returned no verified rows for this category "
+            "— a genuine zero-result search, not a research failure.*"
+        )
+    if status in _RESEARCH_UNAVAILABLE_STATUSES:
+        return (
+            f"\n\n*Research for this category could not be completed ({status.value}). "
+            "This reflects a research-availability gap, not an absence of market opportunity.*"
+        )
+    return ""
+
+
+def _render_keyword_opportunities_table(opportunities: list[KeywordOpportunity], status: ResearchStatus | None) -> str:
+    lines = [
+        "| # | Keyword | Search Intent | Est. Monthly Searches | Target Page | Source | Retrieved |",
+        "|---|---------|----------------|-------------------------|--------------|--------|-----------|",
+    ]
+    for index, opportunity in enumerate(opportunities, start=1):
+        volume = opportunity.estimated_volume or "No sourced estimate"
+        target_page = opportunity.target_page or "No clear existing page match"
+        lines.append(
+            f"| {index} | {_escape_table_cell(opportunity.keyword)} | {_escape_table_cell(opportunity.search_intent)} | "
+            f"{_escape_table_cell(volume)} | {_escape_table_cell(target_page)} | "
+            f"[{_escape_table_cell(opportunity.source_title)}]({opportunity.source_url}) | {opportunity.retrieved_date} |"
+        )
+    return "\n".join(lines) + _render_research_status_note(status)
+
+
+def render_primary_keywords_table(opportunities: list[KeywordOpportunity], status: ResearchStatus | None) -> str:
+    """Render SECTION 1.1's Primary Keywords Table deterministically from accepted, citation-verified rows."""
+    return _render_keyword_opportunities_table(opportunities, status)
+
+
+def render_long_tail_keywords_table(opportunities: list[KeywordOpportunity], status: ResearchStatus | None) -> str:
+    """Render SECTION 1.2's Long-Tail Keywords Table deterministically from accepted, citation-verified rows."""
+    return _render_keyword_opportunities_table(opportunities, status)
+
+
+def render_competitor_overview_table(competitors: list[CompetitorOverview], status: ResearchStatus | None) -> str:
+    """Render SECTION 2.1's Competitor Overview Table deterministically from accepted, citation-verified rows."""
+    lines = [
+        "| Competitor | Website | Estimated Authority | Focus | Source | Retrieved |",
+        "|------------|---------|----------------------|-------|--------|-----------|",
+    ]
+    for competitor in competitors:
+        authority = competitor.estimated_authority or "No sourced estimate"
+        lines.append(
+            f"| {_escape_table_cell(competitor.competitor_name)} | {_escape_table_cell(competitor.website)} | "
+            f"{_escape_table_cell(authority)} | {_escape_table_cell(competitor.focus)} | "
+            f"[{_escape_table_cell(competitor.source_title)}]({competitor.source_url}) | {competitor.retrieved_date} |"
+        )
+    return "\n".join(lines) + _render_research_status_note(status)
+
+
+def render_competitor_gap_table(gaps: list[CompetitorGap], status: ResearchStatus | None) -> str:
+    """Render SECTION 2.2's Keyword Gap Table deterministically, derived only from already-accepted competitors."""
+    lines = [
+        "| Keyword | Competitor Position | Your Gap | Source | Retrieved |",
+        "|---------|----------------------|----------|--------|-----------|",
+    ]
+    for gap in gaps:
+        lines.append(
+            f"| {_escape_table_cell(gap.keyword)} | {_escape_table_cell(gap.competitor_position)} | "
+            f"{_escape_table_cell(gap.your_gap)} | [{_escape_table_cell(gap.source_title)}]({gap.source_url}) | "
+            f"{gap.retrieved_date} |"
+        )
+    return "\n".join(lines) + _render_research_status_note(status)
+
+
+def render_location_opportunity_table(opportunities: list[LocationOpportunity], status: ResearchStatus | None) -> str:
+    """Render SECTION 3.2's Location Opportunity Table deterministically from accepted, citation-verified rows."""
+    lines = [
+        "| City/Region | Primary Keyword | Est. Monthly Searches | Priority | Source | Retrieved |",
+        "|-------------|-------------------|-------------------------|----------|--------|-----------|",
+    ]
+    for opportunity in opportunities:
+        volume = opportunity.estimated_volume or "No sourced estimate"
+        lines.append(
+            f"| {_escape_table_cell(opportunity.city_or_region)} | {_escape_table_cell(opportunity.primary_keyword)} | "
+            f"{_escape_table_cell(volume)} | {_escape_table_cell(opportunity.priority)} | "
+            f"[{_escape_table_cell(opportunity.source_title)}]({opportunity.source_url}) | {opportunity.retrieved_date} |"
+        )
+    return "\n".join(lines) + _render_research_status_note(status)
+
+
+def _inject_keyword_tables(section_markdown: str, primary_table: str, long_tail_table: str) -> str:
+    """Force SECTION 1.1/1.2's tables to the verified, deterministically rendered tables."""
+    section_markdown = _replace_heading_block(section_markdown, "Primary Keywords Table", primary_table)
+    return _replace_heading_block(section_markdown, "Long-Tail Keywords Table", long_tail_table)
+
+
+def _inject_competitor_tables(section_markdown: str, overview_table: str, gap_table: str) -> str:
+    """Force SECTION 2.1/2.2's tables to the verified, deterministically rendered tables."""
+    section_markdown = _replace_heading_block(section_markdown, "Competitor Overview Table", overview_table)
+    return _replace_heading_block(section_markdown, "Keyword Gap Table", gap_table)
+
+
+def _inject_location_table(section_markdown: str, location_table: str) -> str:
+    """
+    Force SECTION 3.2's Location Opportunity Table to the verified,
+    deterministically rendered table.
+
+    Only called when the business is local/service-area with a known
+    region - i.e. exactly when 3.2 legitimately applies - so this never
+    fabricates a table under a "Not Applicable" 3.2 for a non-local
+    business or an insufficient-location-evidence case.
+    """
+    return _replace_heading_block(section_markdown, "Location Opportunity Table", location_table)
+
+
 def _format_section_evidence(group_name: str, context: AuditContext) -> str:
     """
     Build the compact, section-scoped evidence slice for one section group -
@@ -514,16 +1036,21 @@ def _format_section_evidence(group_name: str, context: AuditContext) -> str:
         )
 
     if group_name == "keyword_strategy":
-        return _format_claims(
-            context.research.keyword_opportunities,
-            "No keyword opportunities were found with a citable source.",
+        primary = _format_keyword_opportunities(
+            context.research.primary_keywords,
+            "No primary keyword opportunities were found with a citable source.",
         )
+        long_tail = _format_keyword_opportunities(
+            context.research.long_tail_keywords,
+            "No long-tail keyword opportunities were found with a citable source.",
+        )
+        return f"Primary keyword opportunities:\n{primary}\n\nLong-tail keyword opportunities:\n{long_tail}"
 
     if group_name == "competitor_analysis":
-        competitors = _format_claims(
+        competitors = _format_competitor_overview(
             context.research.competitors, "No real competitors were found with a citable source.",
         )
-        analysis = _format_claims(
+        analysis = _format_competitor_gaps(
             context.research.competitor_analysis,
             "No competitor strengths/gaps were found with a citable source.",
         )
@@ -533,19 +1060,26 @@ def _format_section_evidence(group_name: str, context: AuditContext) -> str:
         if context.is_local_business and context.city_or_region:
             return (
                 f"Business classification: Local/service-area business (region: {context.city_or_region})\n"
-                + _format_claims(
+                + _format_location_opportunities(
                     context.research.local_demand, "No local demand signals were found with a citable source.",
                 )
             )
+        if context.is_local_business:
+            return (
+                "Business classification: Local/service-area business, but no service region could be "
+                "determined from crawl evidence (insufficient_location_evidence).\n"
+                "No location-specific research was run because the service area is unknown - "
+                "state this limitation plainly rather than inventing a region."
+            )
         return (
-            "Business classification: Not local/service-area (or no region could be determined)\n"
+            "Business classification: Not local/service-area\n"
             + _format_claims(
                 context.research.audience_expansion,
                 "No audience/market expansion opportunities were found with a citable source.",
             )
         )
 
-    if group_name == "structured_data_and_execution":
+    if group_name == "structured_data_and_off_page":
         remaining = _format_findings(
             [f for f in findings if f.category in ("Accessibility", "Security")],
             "No Accessibility or Security findings were recorded in this audit.",
@@ -562,19 +1096,6 @@ def _format_section_evidence(group_name: str, context: AuditContext) -> str:
             f"Remaining deterministic findings:\n{remaining}\n\n"
             f"Off-page/authority opportunities:\n{authority}\n\n"
             f"Existing brand presence (SEO_RULES Section 5):\n{brand_presence}"
-        )
-
-    if group_name == "executive_summary":
-        category_lines = "\n".join(
-            f"- {category.category}: {category.score:.1f}/100 (weight {category.weight_percent:.0f}%)"
-            for category in context.score_breakdown.category_scores
-        )
-        top_priority = [f for f in findings if f.severity in (Severity.CRITICAL, Severity.HIGH)]
-        priority_text = _format_findings(top_priority, "No Critical or High severity findings in this audit.")
-        return (
-            f"Overall score: {context.score_breakdown.overall_score:.1f}/100\n\n"
-            f"Category scores:\n{category_lines}\n\n"
-            f"Top priority (Critical/High) findings:\n{priority_text}"
         )
 
     raise ValueError(f"Unknown section group: {group_name!r}")
@@ -606,10 +1127,22 @@ def _build_section_user_message(
     part_headings: tuple[str, ...],
     section_evidence: str,
     master_report_structure: str,
+    *,
+    deterministic_table_note: str = "",
 ) -> str:
-    """Build the user-turn message for one section-generation call."""
+    """
+    Build the user-turn message for one section-generation call.
+
+    Args:
+        deterministic_table_note: An optional extra MANDATORY OUTPUT RULES
+            line bounding the model away from tables this group already
+            renders deterministically (the system overwrites them
+            regardless, but this keeps the model from wasting effort
+            inventing rows that will never be used).
+    """
     template_slice: str = _extract_part_templates(master_report_structure, part_headings)
     heading_list: str = ", ".join(part_headings)
+    extra_rule: str = f"- {deterministic_table_note}\n" if deterministic_table_note else ""
 
     return (
         f"Generate ONLY the following section(s) of the SEO audit report for: {normalized_url}\n\n"
@@ -620,7 +1153,8 @@ def _build_section_user_message(
         "- Do not add, remove, rename, or reorder sections.\n"
         "- Fill every section/table cell using only the verified evidence and cited research below "
         "— never invent facts.\n"
-        "- Do not output any extra wrapper text, commentary, or explanation before or after the section.\n\n"
+        "- Do not output any extra wrapper text, commentary, or explanation before or after the section.\n"
+        f"{extra_rule}\n"
         "## TEMPLATE TO FILL (VERBATIM STRUCTURE)\n\n"
         f"{template_slice}\n\n"
         "---\n\n"
@@ -629,11 +1163,143 @@ def _build_section_user_message(
     )
 
 
-async def _call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
-    """Dispatch to the configured LLM provider, used only by the Phase 4 section pipeline."""
-    if settings.llm_provider == "perplexity":
-        return await _call_perplexity(system_prompt=system_prompt, user_message=user_message, settings=settings)
-    return await _call_gemini(system_prompt=system_prompt, user_message=user_message, settings=settings)
+# Bounds the model away from PART 1.1/1.2's Core Pages/Subpages Tables, which
+# are always overwritten by _inject_inventory_tables() after generation
+# regardless of what the model writes.
+_SITE_INVENTORY_TABLE_NOTE = (
+    "The Core Pages Table (1.1) and Subpages Table (1.2) are already finalized from verified crawl data — "
+    "leave their table body empty (headers only) rather than inventing rows; the system inserts the "
+    "verified tables automatically."
+)
+
+# Same purpose as _SITE_INVENTORY_TABLE_NOTE, one per LLM-generating group whose
+# citation tables are always force-injected afterward — Step 17 (Phase 5): the
+# model is never asked to repair these tables, so it should not waste effort
+# drafting rows for them in the first place.
+_KEYWORD_STRATEGY_TABLE_NOTE = (
+    "The Primary Keywords Table (1.1) and Long-Tail Keywords Table (1.2) are already finalized from "
+    "verified, citation-checked research — leave their table body empty (headers only) rather than "
+    "inventing rows; the system inserts the verified tables automatically."
+)
+_COMPETITOR_ANALYSIS_TABLE_NOTE = (
+    "The Competitor Overview Table (2.1) and Keyword Gap Table (2.2) are already finalized from "
+    "verified, citation-checked research — leave their table body empty (headers only) rather than "
+    "inventing rows; the system inserts the verified tables automatically."
+)
+_LOCATION_TABLE_NOTE = (
+    "The Location Opportunity Table (3.2) is already finalized from verified, citation-checked research — "
+    "leave its table body empty (headers only) rather than inventing rows; the system inserts the "
+    "verified table automatically."
+)
+
+# The "### {heading}" table headings each group's tables are always force-injected
+# under, regardless of what the LLM drafted — used to exclude those tables from
+# the per-group pre-injection citation check (see generate_report_sections()),
+# since asking the LLM to repair a citation gap there is never a repairable
+# narrative issue: the draft is discarded and overwritten either way.
+_DETERMINISTIC_TABLE_HEADINGS_BY_GROUP: dict[str, frozenset[str]] = {
+    "site_inventory": frozenset({"Core Pages Table", "Subpages Table"}),
+    "keyword_strategy": frozenset({"Primary Keywords Table", "Long-Tail Keywords Table"}),
+    "competitor_analysis": frozenset({"Competitor Overview Table", "Keyword Gap Table"}),
+    "location_or_market_expansion": frozenset({"Location Opportunity Table"}),
+}
+
+
+# ---------------------------------------------------------------------------
+# Deterministic fallback narrative — Step 16 (Phase 5)
+# ---------------------------------------------------------------------------
+# Used only when a group's LLM narrative still fails validation after one
+# retry: rather than keep malformed/contradictory best-effort Markdown, this
+# substitutes a plain, always-structurally-valid summary built entirely from
+# `context`'s own verified findings/research, reusing the same formatters
+# _format_section_evidence() uses to instruct the model in the first place.
+
+_FALLBACK_NARRATIVE_NOTICE = (
+    "Automated narrative generation for this section did not pass validation after one retry. "
+    "The summary below is generated directly from this audit's verified findings and research."
+)
+
+
+def _build_location_fallback_markdown(context: AuditContext) -> str:
+    """Build SECTION 3's fallback, preserving the 3.2/3.3 "exactly one not applicable" rule."""
+    research = context.research
+    if context.is_local_business and context.city_or_region:
+        section_32_body = _format_location_opportunities(
+            research.local_demand, "No location-specific research was accepted for this audit.",
+        )
+        section_33_body = "Not applicable — this business was classified as local with a known service region."
+    elif context.is_local_business:
+        # Step 13's insufficient_location_evidence case: no region could be determined,
+        # so no location research was ever run — 3.2 is the one marked not applicable.
+        section_32_body = (
+            "Not applicable — no service region could be determined for this local business "
+            "(insufficient location evidence)."
+        )
+        section_33_body = (
+            "This business was classified as local, but no service region could be determined from "
+            "crawl evidence, so location-specific research was not run."
+        )
+    else:
+        section_32_body = "Not applicable — this business was not classified as a local/service-area business."
+        section_33_body = _format_claims(
+            research.audience_expansion, "No audience/market expansion opportunities were accepted for this audit.",
+        )
+
+    return (
+        "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+        f"{_FALLBACK_NARRATIVE_NOTICE}\n\n"
+        "## 3.1 Applicability Assessment\n\n"
+        f"Business classification: {'local/service-area' if context.is_local_business else 'not local/service-area'}"
+        f"{f' (region: {context.city_or_region})' if context.city_or_region else ''}.\n\n"
+        "## 3.2 Local Location Opportunities\n\n"
+        f"{section_32_body}\n\n"
+        "## 3.3 Audience & Market Expansion\n\n"
+        f"{section_33_body}\n"
+    )
+
+
+def _build_fallback_section_markdown(group_name: str, part_headings: tuple[str, ...], context: AuditContext) -> str:
+    """
+    Build a safe, always-structurally-valid Markdown block for one section
+    group entirely from `context`'s verified findings/research — used only
+    once a group's LLM narrative fails validation twice.
+
+    Guarantees the required "# {heading}:" headings and includes no banned
+    phrases or citation-less tables, so it never needs its own retry.
+    """
+    if group_name == "location_or_market_expansion":
+        return _build_location_fallback_markdown(context)
+
+    findings = context.score_breakdown.findings
+    if group_name == "keyword_strategy":
+        body = (
+            "Primary keyword opportunities:\n"
+            + _format_keyword_opportunities(
+                context.research.primary_keywords, "No primary keyword opportunities were accepted for this audit.",
+            )
+            + "\n\nLong-tail keyword opportunities:\n"
+            + _format_keyword_opportunities(
+                context.research.long_tail_keywords, "No long-tail keyword opportunities were accepted for this audit.",
+            )
+        )
+    elif group_name == "competitor_analysis":
+        body = (
+            "Competitors:\n"
+            + _format_competitor_overview(
+                context.research.competitors, "No competitors were accepted for this audit.",
+            )
+            + "\n\nCompetitor gaps:\n"
+            + _format_competitor_gaps(
+                context.research.competitor_analysis, "No competitor gaps were accepted for this audit.",
+            )
+        )
+    else:
+        # site_inventory and structured_data_and_off_page: a plain findings summary.
+        body = _format_findings(findings, "No additional findings were recorded for this audit.")
+
+    return "\n\n".join(
+        f"# {heading}: SUMMARY\n\n{_FALLBACK_NARRATIVE_NOTICE}\n\n{body}" for heading in part_headings
+    ) + "\n"
 
 
 async def generate_report_sections(
@@ -670,20 +1336,45 @@ async def generate_report_sections(
     sections: dict[str, str] = {}
 
     for group_name, part_headings in _SECTION_GROUPS:
+        if group_name in _DETERMINISTIC_ONLY_GROUPS:
+            # Every heading in this group already has a Python renderer (Steps 6-8) —
+            # no LLM call is made, so the model has no chance to invent or rewrite a fact.
+            section_markdown = _render_technical_and_onpage_section(context)
+            sections[group_name] = section_markdown
+            logger.info(
+                "Section '%s' rendered deterministically for %s (%d chars, no LLM call)",
+                group_name, context.normalized_url, len(section_markdown),
+            )
+            continue
+
         section_evidence: str = _format_section_evidence(group_name, context)
+        if group_name == "site_inventory":
+            deterministic_table_note = _SITE_INVENTORY_TABLE_NOTE
+        elif group_name == "keyword_strategy":
+            deterministic_table_note = _KEYWORD_STRATEGY_TABLE_NOTE
+        elif group_name == "competitor_analysis":
+            deterministic_table_note = _COMPETITOR_ANALYSIS_TABLE_NOTE
+        elif group_name == "location_or_market_expansion" and context.is_local_business and context.city_or_region:
+            deterministic_table_note = _LOCATION_TABLE_NOTE
+        else:
+            deterministic_table_note = ""
         user_message: str = _build_section_user_message(
             context.normalized_url, part_headings, section_evidence, prompt_context.master_report_structure,
+            deterministic_table_note=deterministic_table_note,
         )
 
-        section_markdown: str = await _call_llm(system_prompt, user_message, settings)
+        section_markdown: str = await generate_text(system_prompt, user_message, settings)
 
+        excluded_table_headings: frozenset[str] = _DETERMINISTIC_TABLE_HEADINGS_BY_GROUP.get(group_name, frozenset())
         required_headings: tuple[str, ...] = tuple(f"# {heading}:" for heading in part_headings)
         missing: list[str] = _missing_required_report_parts(section_markdown, required_headings)
         banned: list[str] = _find_banned_phrases(section_markdown)
         location_issues: list[str] = (
             _validate_location_section(section_markdown) if group_name == "location_or_market_expansion" else []
         )
-        citation_issues: list[str] = _validate_citation_columns(section_markdown)
+        citation_issues: list[str] = _validate_citation_columns(
+            section_markdown, exclude_table_headings=excluded_table_headings,
+        )
 
         if missing or banned or location_issues or citation_issues:
             logger.warning(
@@ -693,19 +1384,67 @@ async def generate_report_sections(
             retry_message: str = _build_retry_user_message(
                 user_message, missing, banned, location_issues, citation_issues,
             )
-            section_markdown = await _call_llm(system_prompt, retry_message, settings)
+            section_markdown = await generate_text(system_prompt, retry_message, settings)
 
             missing = _missing_required_report_parts(section_markdown, required_headings)
             banned = _find_banned_phrases(section_markdown)
             location_issues = (
                 _validate_location_section(section_markdown) if group_name == "location_or_market_expansion" else []
             )
-            citation_issues = _validate_citation_columns(section_markdown)
+            citation_issues = _validate_citation_columns(
+                section_markdown, exclude_table_headings=excluded_table_headings,
+            )
             if missing or banned or location_issues or citation_issues:
                 logger.warning(
-                    "Section '%s' for %s still failed validation after retry; keeping best-effort output",
-                    group_name, context.normalized_url,
+                    "Section '%s' for %s still failed validation after retry "
+                    "(missing=%s banned=%s location=%s citation=%s); substituting deterministic fallback narrative",
+                    group_name, context.normalized_url, missing, banned, location_issues, citation_issues,
                 )
+                section_markdown = _build_fallback_section_markdown(group_name, part_headings, context)
+
+        if group_name == "site_inventory":
+            # Never trust the model's own Core Pages/Subpages Tables — always
+            # overwrite them with the deterministically rendered, verified tables.
+            inventory = build_inventory_section_data(context)
+            section_markdown = _inject_inventory_tables(
+                section_markdown,
+                render_core_pages_table(inventory),
+                render_subpages_table(inventory),
+            )
+        elif group_name == "keyword_strategy":
+            # Never trust the model's own keyword tables — always overwrite them
+            # with the deterministically rendered, citation-verified rows.
+            section_markdown = _inject_keyword_tables(
+                section_markdown,
+                render_primary_keywords_table(
+                    context.research.primary_keywords, context.research.research_statuses.get("primary_keywords"),
+                ),
+                render_long_tail_keywords_table(
+                    context.research.long_tail_keywords, context.research.research_statuses.get("long_tail_keywords"),
+                ),
+            )
+        elif group_name == "competitor_analysis":
+            # Never trust the model's own competitor tables — always overwrite them
+            # with the deterministically rendered, citation-verified rows.
+            section_markdown = _inject_competitor_tables(
+                section_markdown,
+                render_competitor_overview_table(
+                    context.research.competitors, context.research.research_statuses.get("competitors"),
+                ),
+                render_competitor_gap_table(
+                    context.research.competitor_analysis, context.research.research_statuses.get("competitor_analysis"),
+                ),
+            )
+        elif group_name == "location_or_market_expansion" and context.is_local_business and context.city_or_region:
+            # Only applies when SECTION 3.2 legitimately applies (local business with a
+            # known region) — never fabricates a table for a non-local business or an
+            # insufficient-location-evidence case, where 3.2 must stay "Not Applicable".
+            section_markdown = _inject_location_table(
+                section_markdown,
+                render_location_opportunity_table(
+                    context.research.local_demand, context.research.research_statuses.get("local_demand"),
+                ),
+            )
 
         sections[group_name] = section_markdown
         logger.info(
@@ -719,12 +1458,8 @@ def assemble_report_markdown(sections: dict[str, str]) -> str:
     """
     Combine generate_report_sections()'s per-group Markdown into one final report.
 
-    Every group except the executive summary is joined in _SECTION_GROUPS'
-    declaration order, which is already the report's final read order. The
-    executive summary is generated last, from every other group's completed
-    findings, but must still read as SECTION 7 — immediately before SECTION 8
-    (Methodology) — so it is spliced in at that heading rather than appended
-    at generation order.
+    Groups are joined in _SECTION_GROUPS' declaration order, which is the
+    report's final read order.
 
     Args:
         sections: The dict returned by generate_report_sections().
@@ -732,68 +1467,7 @@ def assemble_report_markdown(sections: dict[str, str]) -> str:
     Returns:
         The assembled Markdown report, in the template's PART/SECTION order.
     """
-    body_group_names: list[str] = [name for name, _ in _SECTION_GROUPS if name != "executive_summary"]
-    body: str = "\n\n".join(sections[name] for name in body_group_names if name in sections)
-
-    executive_summary: str = sections.get("executive_summary", "")
-    if not executive_summary:
-        return body
-
-    methodology_heading_index: int = body.find("# SECTION 8:")
-    if methodology_heading_index == -1:
-        return f"{body}\n\n{executive_summary}"
-    return f"{body[:methodology_heading_index]}{executive_summary}\n\n{body[methodology_heading_index:]}"
-
-
-def build_source_register(context: AuditContext) -> str:
-    """
-    Deterministically compile every unique externally researched claim's
-    provenance into SECTION 8.3's Source Register Table.
-
-    Built directly from context.research rather than trusting the LLM to
-    faithfully reproduce citations it already saw in each section's
-    evidence — the same evidence, computed once, cannot drift or be
-    accidentally altered/omitted by generation.
-
-    Args:
-        context: The AuditContext whose research bundle is being cited.
-
-    Returns:
-        A Markdown table matching MASTER_REPORT_STRUCTURE.md's SECTION 8.3
-        format ("| # | Claim | Source URL | Retrieved |"), or a plain
-        statement if no external research claims were used in this audit.
-    """
-    all_claims: list[ResearchClaim] = [
-        *context.research.keyword_opportunities,
-        *context.research.competitors,
-        *context.research.competitor_analysis,
-        *context.research.authority_opportunities,
-        *context.research.local_demand,
-        *context.research.audience_expansion,
-    ]
-
-    seen: set[tuple[str, str]] = set()
-    unique_claims: list[ResearchClaim] = []
-    for claim in all_claims:
-        key = (claim.claim, claim.source_url)
-        if key in seen:
-            continue  # Same claim already cited from this exact source — skip the duplicate row
-        seen.add(key)
-        unique_claims.append(claim)
-
-    if not unique_claims:
-        return (
-            "No externally researched claims were used in this audit; "
-            "every finding is drawn from verified crawl evidence."
-        )
-
-    rows: list[str] = [
-        "| # | Claim | Source URL | Retrieved |",
-        "|---|-------|------------|-----------|",
-    ]
-    for index, claim in enumerate(unique_claims, start=1):
-        rows.append(f"| {index} | {claim.claim} | {claim.source_url} | {claim.retrieved_date} |")
-    return "\n".join(rows)
+    return "\n\n".join(sections[name] for name, _ in _SECTION_GROUPS if name in sections)
 
 
 def _validate_no_empty_table_cells(markdown_report: str) -> list[str]:
@@ -843,14 +1517,19 @@ def _known_source_urls(context: AuditContext) -> set[str]:
         known.update(entry.url for entry in context.site_evidence.inventory.entries)
 
     claim_groups: tuple[list[ResearchClaim], ...] = (
-        context.research.keyword_opportunities,
-        context.research.competitors,
-        context.research.competitor_analysis,
         context.research.authority_opportunities,
-        context.research.local_demand,
         context.research.audience_expansion,
     )
     known.update(claim.source_url for claims in claim_groups for claim in claims)
+    known.update(
+        opportunity.source_url
+        for opportunities in (context.research.primary_keywords, context.research.long_tail_keywords)
+        for opportunity in opportunities
+    )
+    known.update(competitor.source_url for competitor in context.research.competitors)
+    known.update(competitor.website for competitor in context.research.competitors)
+    known.update(gap.source_url for gap in context.research.competitor_analysis)
+    known.update(opportunity.source_url for opportunity in context.research.local_demand)
     return known
 
 
@@ -876,37 +1555,9 @@ def _validate_url_provenance(markdown_report: str, context: AuditContext) -> lis
     return issues
 
 
-def _score_text_variants(score: float) -> tuple[str, ...]:
-    """Textual forms a score might legitimately be written in, e.g. 82.5 -> ('82.5', '82', '83')."""
-    return (f"{score:.1f}", str(int(score)), str(round(score)))
-
-
-def _validate_score_consistency(markdown_report: str, context: AuditContext) -> list[str]:
-    """
-    Flag a computed overall/category score that never appears in the report text.
-
-    The scores in context.score_breakdown are deterministic (analysis_service),
-    not LLM output — the report narrative must quote these exact figures
-    rather than a number the LLM invented independently.
-    """
-    issues: list[str] = []
-    overall = context.score_breakdown.overall_score
-    if not any(variant in markdown_report for variant in _score_text_variants(overall)):
-        issues.append(f"Computed overall score {overall} does not appear anywhere in the report")
-
-    for category_score in context.score_breakdown.category_scores:
-        if not any(variant in markdown_report for variant in _score_text_variants(category_score.score)):
-            issues.append(
-                f"Computed {category_score.category} score {category_score.score} does not appear anywhere "
-                "in the report",
-            )
-    return issues
-
-
-# Metrics this MVP's crawler never measures at all — see AI_REPORT_GUIDELINES.md
-# Section 8 ("Invent keyword rankings", "Invent backlinks"). A specific number
-# for either of these can only be invented, regardless of what other evidence
-# was collected for this audit.
+# Metrics this MVP's crawler never measures at all — see the "Prohibited
+# Claims" rules in AI_REPORT_GUIDELINES.md. A specific number for either can
+# only be invented, regardless of what other evidence was collected.
 _UNSUPPORTED_METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\brank(?:s|ed|ing)?\D{0,10}#?\d+\D{0,15}(?:for|on)\b", "a specific keyword ranking position"),
     (r"\b\d+\D{0,10}backlinks?\b", "a specific backlink count"),
@@ -941,25 +1592,214 @@ def _validate_no_unsupported_metric_claims(markdown_report: str, performance_evi
     return issues
 
 
-# REPORT_SPECIFICATION.md's "AI Executive Summary" section: "Maximum: 400 words."
-_EXECUTIVE_SUMMARY_MAX_WORDS = 400
+# ---------------------------------------------------------------------------
+# Section-aware evidence validators (Step 15 — Phase 5)
+# ---------------------------------------------------------------------------
+# These validators check the fully assembled report against `context` itself,
+# independent of whichever renderer/injection call produced it. They exist to
+# catch a *pipeline* regression (a group never generated, an injection call
+# skipped, a retry/dedup/assembly step corrupting a block) — not to repeat
+# the renderer unit tests in report_data_service.py/analysis_service.py.
 
 
-def _validate_executive_summary_length(markdown_report: str) -> list[str]:
-    """Enforce REPORT_SPECIFICATION.md's 400-word maximum for the Executive Summary (SECTION 7)."""
-    match = re.search(
-        r"^# SECTION 7:[^\n]*\n([\s\S]*?)(?=^# (?:PART|SECTION) \d+:|\Z)", markdown_report, re.MULTILINE,
-    )
-    if match is None:
+def _find_table_after_heading(markdown_report: str, heading_text: str) -> list[list[str]]:
+    """Return the Markdown table(s) found under a "### {heading_text}" heading, or [] if absent."""
+    body = _extract_section_body(markdown_report, f"### {heading_text}")
+    return _find_table_blocks(body) if body is not None else []
+
+
+def _validate_inventory_table_coverage(markdown_report: str, context: AuditContext) -> list[str]:
+    """
+    Every crawled page (homepage + sampled) must appear exactly once across
+    the Core Pages Table and Subpages Table combined, with a Title Tag cell
+    matching the verified page_title (or "Missing").
+    """
+    inventory = build_inventory_section_data(context)
+    expected_rows: dict[str, PageReportRow] = {row.url: row for row in (*inventory.core_pages, *inventory.subpages)}
+    issues: list[str] = []
+    seen_urls: list[str] = []
+
+    for heading in ("Core Pages Table", "Subpages Table"):
+        for table in _find_table_after_heading(markdown_report, heading):
+            header_cells = [cell.lower() for cell in _split_table_row(table[0])]
+            if "url" not in header_cells or "title tag" not in header_cells:
+                continue
+            url_index, title_index = header_cells.index("url"), header_cells.index("title tag")
+            for data_row in table[2:]:
+                cells = _split_table_row(data_row)
+                if len(cells) <= max(url_index, title_index):
+                    continue  # malformed row width — not this validator's concern
+                url = cells[url_index]
+                seen_urls.append(url)
+                page = expected_rows.get(url)
+                if page is None:
+                    continue  # an unknown URL is already flagged by _validate_url_provenance()
+                expected_title = _escape_table_cell(page.page_title) if page.page_title else "Missing"
+                if cells[title_index] != expected_title:
+                    issues.append(
+                        f"Inventory table's Title Tag cell for {url} is \"{cells[title_index]}\", "
+                        f"but verified evidence has \"{expected_title}\""
+                    )
+
+    for url in expected_rows:
+        occurrences = seen_urls.count(url)
+        if occurrences == 0:
+            issues.append(f"Crawled page {url} is missing from both the Core Pages Table and Subpages Table")
+        elif occurrences > 1:
+            issues.append(f"Crawled page {url} appears {occurrences} times across the inventory tables (expected exactly once)")
+
+    return issues
+
+
+def _validate_seo_notes_cell_counts(markdown_report: str) -> list[str]:
+    """Every SEO Notes cell in the Core Pages/Subpages tables must contain exactly three `<li>` items."""
+    issues: list[str] = []
+    for heading in ("Core Pages Table", "Subpages Table"):
+        for table in _find_table_after_heading(markdown_report, heading):
+            header_cells = [cell.lower() for cell in _split_table_row(table[0])]
+            if "seo notes" not in header_cells:
+                continue
+            notes_index = header_cells.index("seo notes")
+            for row_number, data_row in enumerate(table[2:], start=1):
+                cells = _split_table_row(data_row)
+                if notes_index >= len(cells):
+                    continue  # malformed row width — not this validator's concern
+                li_count = cells[notes_index].count("<li>")
+                if li_count != 3:
+                    issues.append(f"Row {row_number} of the {heading} has {li_count} SEO Notes <li> item(s), expected exactly 3")
+    return issues
+
+
+# Phrases that hedge a transient HTTP status observation — their presence means the
+# report is not stating the status as a settled, confirmed fact.
+_HTTP_CLAIM_HEDGE_TERMS: tuple[str, ...] = (
+    "unconfirmed", "single", "transient", "observed once", "verify", "re-check",
+    "recheck", "may ", "possibly", "temporary", "intermittent",
+)
+
+
+def _validate_no_unconfirmed_http_claims(markdown_report: str, context: AuditContext) -> list[str]:
+    """
+    Flag report text stating a 429/5xx status as settled fact for a page
+    where that status was only ever observed once and never confirmed by a
+    retry (see fetch_service.is_transient_status_code()/PageEvidence.attempt_count).
+    """
+    technical = build_technical_section_data(context)
+    unconfirmed_codes = {
+        page.http_status
+        for page in technical.pages
+        if page.http_status is not None and is_transient_status_code(page.http_status) and page.attempt_count <= 1
+    }
+    if not unconfirmed_codes:
         return []
 
-    word_count = len(match.group(1).split())
-    if word_count > _EXECUTIVE_SUMMARY_MAX_WORDS:
-        return [
-            f"Executive summary is {word_count} words, exceeding the "
-            f"{_EXECUTIVE_SUMMARY_MAX_WORDS}-word maximum (REPORT_SPECIFICATION.md)",
-        ]
-    return []
+    issues: list[str] = []
+    sentences = re.split(r"(?<=[.!?])\s+", markdown_report)
+    for status_code in unconfirmed_codes:
+        code_pattern = re.compile(rf"\b{status_code}\b")
+        for sentence in sentences:
+            if code_pattern.search(sentence) and not any(term in sentence.lower() for term in _HTTP_CLAIM_HEDGE_TERMS):
+                issues.append(
+                    f"Report states HTTP {status_code} without hedging, but this status was only "
+                    "observed once and never confirmed by a retry"
+                )
+                break  # one flagged sentence per status code is enough to report the issue
+    return issues
+
+
+def _validate_deterministic_blocks_present(markdown_report: str, context: AuditContext) -> list[str]:
+    """
+    Confirm every deterministic block this pipeline renders — inventory
+    tables, PART 2/3's technical/on-page facts, and SECTION 1-3's opportunity
+    tables — is present in the assembled report exactly as this audit's
+    evidence and accepted research rows require.
+
+    Re-renders each block from `context` using the same pure renderers the
+    pipeline itself calls and requires the exact output to appear verbatim in
+    the final Markdown. A mismatch here means the pipeline failed to inject a
+    block, or a later step (retry, dedup, assembly) corrupted it — it also
+    means a deterministic table silently lost its rows, or a research table's
+    rows no longer exactly match the accepted typed research results.
+    """
+    inventory = build_inventory_section_data(context)
+    technical = build_technical_section_data(context)
+    on_page = build_on_page_section_data(context)
+    research = context.research
+
+    expected_blocks: dict[str, str] = {
+        "Core Pages Table": render_core_pages_table(inventory),
+        "Subpages Table": render_subpages_table(inventory),
+        "Issues Table": render_critical_high_issues_table(technical.findings),
+        "robots.txt section": render_robots_txt_section(technical.robots_txt),
+        "sitemap section": render_sitemap_section(technical.sitemaps),
+        "PageSpeed section": render_pagespeed_section(technical.performance),
+        "indexability section": render_indexability_section(technical.pages, technical.robots_txt),
+        "schema section": render_schema_section(technical.detected_schema_types),
+        "Homepage Elements Table": render_homepage_elements_table(on_page.homepage),
+        "Priority Pages Table": render_priority_pages_table(on_page.priority_pages),
+        "Content Quality section": render_content_quality_section(on_page.content_findings),
+        "Primary Keywords Table": render_primary_keywords_table(
+            research.primary_keywords, research.research_statuses.get("primary_keywords"),
+        ),
+        "Long-Tail Keywords Table": render_long_tail_keywords_table(
+            research.long_tail_keywords, research.research_statuses.get("long_tail_keywords"),
+        ),
+        "Competitor Overview Table": render_competitor_overview_table(
+            research.competitors, research.research_statuses.get("competitors"),
+        ),
+        "Keyword Gap Table": render_competitor_gap_table(
+            research.competitor_analysis, research.research_statuses.get("competitor_analysis"),
+        ),
+    }
+    if context.is_local_business and context.city_or_region:
+        expected_blocks["Location Opportunity Table"] = render_location_opportunity_table(
+            research.local_demand, research.research_statuses.get("local_demand"),
+        )
+
+    return [
+        f"Report is missing the expected deterministic {label} content"
+        for label, expected in expected_blocks.items()
+        if expected not in markdown_report
+    ]
+
+
+# Removed in the Phase 1 template reduction (docs/ADR/ADR-001-MVP-Architecture.md) — must never reappear.
+_REMOVED_SECTION_HEADINGS: tuple[str, ...] = ("# SECTION 6:", "# SECTION 7:", "# SECTION 8:")
+
+
+def _validate_removed_sections_absent(markdown_report: str) -> list[str]:
+    """Flag any reappearance of a Section 6-8 heading removed from the canonical template."""
+    return [f"Report contains a removed heading: {heading}" for heading in _REMOVED_SECTION_HEADINGS if heading in markdown_report]
+
+
+class ReportIntegrityError(RuntimeError):
+    """
+    Raised when a deterministic report block — content rendered purely from
+    AuditContext by this pipeline's own renderers, never touched by the LLM
+    — fails validation after assembly.
+
+    This can only be caused by a pipeline bug (a missed injection call, a
+    dedup step corrupting a table, evidence wired to the wrong renderer),
+    never by LLM narrative quality, so it is raised instead of tolerated as
+    a "best effort" checkpoint issue.
+    """
+
+
+def _validate_deterministic_integrity(markdown_report: str, context: AuditContext) -> list[str]:
+    """
+    Run only the checks whose target content is produced entirely by this
+    pipeline's own pure renderers and force-injected regardless of what the
+    LLM wrote (Core/Subpages inventory tables and every block
+    _validate_deterministic_blocks_present() re-renders from context).
+
+    A non-empty result here is always a programming error, never an LLM
+    content-quality issue — see ReportIntegrityError.
+    """
+    issues: list[str] = []
+    issues.extend(_validate_inventory_table_coverage(markdown_report, context))
+    issues.extend(_validate_seo_notes_cell_counts(markdown_report))
+    issues.extend(_validate_deterministic_blocks_present(markdown_report, context))
+    return issues
 
 
 def validate_assembled_report(markdown_report: str, master_report_structure: str, context: AuditContext) -> list[str]:
@@ -969,6 +1809,14 @@ def validate_assembled_report(markdown_report: str, master_report_structure: str
     This is the single entry point called after assemble_report_markdown().
     It only reports issues — it does not retry or repair anything itself,
     since per-section retries already happened in generate_report_sections().
+
+    Note: this includes the deterministic-integrity checks (see
+    _validate_deterministic_integrity()) for completeness/inspection, but
+    assemble_and_validate_report() checks those separately first and raises
+    ReportIntegrityError before ever calling this function if they fail —
+    so by the time this runs in the normal pipeline, they are guaranteed
+    empty. This function's own copy of those checks stays useful for direct
+    callers/tests that want the full issue list without raising.
 
     Args:
         markdown_report: The full assembled report from assemble_report_markdown().
@@ -994,12 +1842,12 @@ def validate_assembled_report(markdown_report: str, master_report_structure: str
     issues.extend(_validate_no_empty_table_cells(markdown_report))
     issues.extend(_validate_table_column_counts(markdown_report))
     issues.extend(_validate_url_provenance(markdown_report, context))
-    issues.extend(_validate_score_consistency(markdown_report, context))
     performance = context.site_evidence.performance
     performance_evidence_available = performance is not None and performance.is_available
     issues.extend(_validate_no_unsupported_metric_claims(markdown_report, performance_evidence_available))
-    issues.extend(_validate_executive_summary_length(markdown_report))
-
+    issues.extend(_validate_deterministic_integrity(markdown_report, context))
+    issues.extend(_validate_no_unconfirmed_http_claims(markdown_report, context))
+    issues.extend(_validate_removed_sections_absent(markdown_report))
     return issues
 
 
@@ -1025,13 +1873,19 @@ def assemble_and_validate_report(
     """
     Assemble generate_report_sections()'s output into one report and validate it in a single call.
 
-    This is Step 17's "fail with a useful checkpoint status" step: callers
-    get back the assembled Markdown (kept even if imperfect, since
-    per-section retries already happened in generate_report_sections())
-    together with a definitive is_valid verdict and the specific issues
-    found, instead of calling assemble_report_markdown() and
-    validate_assembled_report() separately and interpreting an empty
-    issues list themselves.
+    Callers get back the assembled Markdown (kept even if it has narrative
+    issues, since per-section retries/fallback already happened in
+    generate_report_sections()) together with a definitive is_valid verdict
+    and the specific issues found, instead of calling
+    assemble_report_markdown() and validate_assembled_report() separately
+    and interpreting an empty issues list themselves.
+
+    Raises:
+        ReportIntegrityError: If any deterministic block (content this
+            pipeline force-injects from AuditContext, never touched by the
+            LLM) failed to survive assembly intact — always a pipeline bug,
+            never an LLM content-quality issue, so it is never returned as
+            a soft "best effort" checkpoint issue.
 
     Args:
         sections: The dict returned by generate_report_sections().
@@ -1041,14 +1895,15 @@ def assemble_and_validate_report(
     Returns:
         AssembledReportResult with the assembled Markdown, any issues found, and is_valid.
     """
-    sections_with_register = dict(sections)
-    if "structured_data_and_execution" in sections_with_register:
-        sections_with_register["structured_data_and_execution"] = _replace_source_register_table(
-            sections_with_register["structured_data_and_execution"],
-            build_source_register(context),
+    markdown_report: str = _deduplicate_table_rows(assemble_report_markdown(sections))
+
+    integrity_issues: list[str] = _validate_deterministic_integrity(markdown_report, context)
+    if integrity_issues:
+        raise ReportIntegrityError(
+            f"Assembled report for audit {context.audit_id} failed deterministic integrity validation: "
+            + "; ".join(integrity_issues)
         )
 
-    markdown_report: str = _deduplicate_table_rows(assemble_report_markdown(sections_with_register))
     issues: list[str] = validate_assembled_report(markdown_report, master_report_structure, context)
     return AssembledReportResult(markdown_report=markdown_report, issues=issues, is_valid=not issues)
 
@@ -1091,21 +1946,20 @@ async def generate_report(
     audit_id: str | None = None,
 ) -> ReportResult:
     """
-    Generate a Markdown SEO audit report using the Gemini LLM.
+    Generate a Markdown SEO audit report using the configured LLM provider.
 
     Workflow:
-      1. Validate the API key is configured.
-      2. Format the verified evidence as a structured text block.
-      3. Substitute the website URL into the audit prompt template.
-      4. Build the LLM request (system prompt + user message).
-      5. Call Gemini asynchronously (non-blocking).
-      6. Return the report with a unique audit ID and timestamp.
+      1. Format the verified evidence as a structured text block.
+      2. Substitute the website URL into the audit prompt template.
+      3. Build the LLM request (system prompt + user message).
+      4. Call the configured provider asynchronously (non-blocking) via generate_text().
+      5. Return the report with a unique audit ID and timestamp.
 
     Args:
         normalized_url: The website URL that was audited.
         evidence: Verified SEO data from extractor_service.extract().
         prompt_context: Loaded guidance files from prompt_loader.load_prompt_context().
-        settings: Application settings providing the Gemini API key and model name.
+        settings: Application settings providing the LLM provider, API key, and model name.
         audit_id: Pre-generated ID to reuse (e.g. from an already-created
             job record); a new one is generated if not supplied.
 
@@ -1113,33 +1967,18 @@ async def generate_report(
         ReportResult containing the Markdown report, audit ID, and metadata.
 
     Raises:
-        ValueError: If the Gemini API key is not configured.
-        RuntimeError: If the LLM fails to return a usable response.
+        ValueError: If the configured provider's API key is not set (raised by generate_text()).
+        LLMProviderError: If the LLM fails to return a usable response.
     """
     logger.info("Starting report generation for: %s", normalized_url)
 
-    # --- Step 1: Validate API key -------------------------------------------
-
-    if settings.llm_provider == "perplexity":
-        if not settings.perplexity_api_key:
-            raise ValueError(
-                "PERPLEXITY_API_KEY is not configured. "
-                "Add it to the .env file: PERPLEXITY_API_KEY=your_key_here"
-            )
-    elif not settings.gemini_api_key:
-        # Fail fast with a clear message rather than crashing inside the Gemini SDK
-        raise ValueError(
-            "GEMINI_API_KEY is not configured. "
-            "Add it to the .env file: GEMINI_API_KEY=your_key_here"
-        )
-
-    # --- Step 2: Format the audit evidence as structured text ---------------
+    # --- Step 1: Format the audit evidence as structured text ---------------
 
     evidence_text: str = _format_evidence(normalized_url, evidence)
     # Converts the AuditEvidence dataclass into a readable Markdown-formatted block
     # This is the "user message" that tells the LLM what was found on the website
 
-    # --- Step 3: Substitute URL into the audit prompt -----------------------
+    # --- Step 2: Substitute URL into the audit prompt -----------------------
 
     audit_prompt_with_url: str = prompt_context.audit_prompt.replace(
         "{{website_url}}",  # The template placeholder defined in seo_audit.prompt.md
@@ -1156,7 +1995,7 @@ async def generate_report(
         ai_guidelines=prompt_context.ai_guidelines,
     )
 
-    # --- Step 4: Build LLM request ------------------------------------------
+    # --- Step 3: Build LLM request ------------------------------------------
 
     system_prompt: str = context_with_url.combined_system_prompt
     # The combined system prompt includes all four guidance files assembled in priority order:
@@ -1175,20 +2014,9 @@ async def generate_report(
         len(user_message),
     )
 
-    # --- Step 5: Call the configured LLM provider --------------------------
+    # --- Step 4: Call the configured LLM provider --------------------------
 
-    if settings.llm_provider == "perplexity":
-        markdown_report: str = await _call_perplexity(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            settings=settings,
-        )
-    else:
-        markdown_report: str = await _call_gemini(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            settings=settings,
-        )
+    markdown_report: str = await generate_text(system_prompt, user_message, settings)
 
     # Derive required headings from the template that was actually used for this run.
     # This reflects any parts the user has added or removed from MASTER_REPORT_STRUCTURE.md.
@@ -1244,18 +2072,7 @@ async def generate_report(
             retry_user_message: str = _build_retry_user_message(
                 user_message, missing_parts, banned_phrases, location_issues, citation_issues
             )
-            if settings.llm_provider == "perplexity":
-                markdown_report = await _call_perplexity(
-                    system_prompt=system_prompt,
-                    user_message=retry_user_message,
-                    settings=settings,
-                )
-            else:
-                markdown_report = await _call_gemini(
-                    system_prompt=system_prompt,
-                    user_message=retry_user_message,
-                    settings=settings,
-                )
+            markdown_report = await generate_text(system_prompt, retry_user_message, settings)
 
             missing_parts = _missing_required_report_parts(markdown_report, required_headings)
             banned_phrases = _find_banned_phrases(markdown_report)
@@ -1317,118 +2134,6 @@ async def generate_report(
         markdown_report=markdown_report,
         created_at=created_at,
     )
-
-
-# ---------------------------------------------------------------------------
-# LLM call helpers
-# ---------------------------------------------------------------------------
-
-async def _call_gemini(
-    system_prompt: str,
-    user_message: str,
-    settings: Settings,
-) -> str:
-    """
-    Call the Gemini API asynchronously.
-
-    The Gemini SDK is synchronous; asyncio.to_thread() keeps the FastAPI
-    event loop unblocked while waiting for the response.
-
-    Args:
-        system_prompt: Combined guidance context as the system instruction.
-        user_message: Formatted audit evidence as the user turn.
-        settings: Provides GEMINI_API_KEY and GEMINI_MODEL.
-
-    Returns:
-        Markdown report text from the LLM.
-
-    Raises:
-        RuntimeError: If the LLM returns an empty or blocked response.
-    """
-    logger.info("Calling Gemini model: %s", settings.gemini_model)
-
-    genai.configure(api_key=settings.gemini_api_key)
-    # Configure the SDK with the API key from .env — done here (not at module import)
-    # so tests can mock genai before any configuration takes place
-
-    model = genai.GenerativeModel(
-        model_name=settings.gemini_model,
-        system_instruction=system_prompt,
-    )
-
-    try:
-        response = await asyncio.to_thread(model.generate_content, user_message)
-    except Exception as llm_error:
-        logger.error("Gemini API call failed: %s", llm_error)
-        raise RuntimeError(
-            f"LLM report generation failed: {llm_error}. "
-            "Check GEMINI_API_KEY in .env and verify the API is reachable."
-        ) from llm_error
-
-    if not response or not response.text:
-        logger.error("Gemini returned an empty or blocked response")
-        raise RuntimeError(
-            "The LLM returned an empty response. "
-            "This may occur if the request was blocked by safety filters. "
-            "Try with a different URL or check the Gemini safety settings."
-        )
-
-    logger.info("Gemini response received: %d characters", len(response.text))
-    return response.text
-
-
-async def _call_perplexity(
-    system_prompt: str,
-    user_message: str,
-    settings: Settings,
-) -> str:
-    """
-    Call the Perplexity API asynchronously using the OpenAI-compatible client.
-
-    Args:
-        system_prompt: Combined guidance context as the system instruction.
-        user_message: Formatted audit evidence as the user turn.
-        settings: Provides PERPLEXITY_API_KEY and PERPLEXITY_MODEL.
-
-    Returns:
-        Markdown report text from the LLM.
-
-    Raises:
-        RuntimeError: If the LLM returns an empty or missing response.
-    """
-    logger.info("Calling Perplexity model: %s", settings.perplexity_model)
-
-    client = AsyncOpenAI(
-        api_key=settings.perplexity_api_key,
-        base_url="https://api.perplexity.ai",
-    )
-
-    try:
-        response = await client.chat.completions.create(
-            model=settings.perplexity_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=16000,  # sonar-pro needs an explicit limit for long reports
-        )
-    except Exception as llm_error:
-        logger.error("Perplexity API call failed: %s", llm_error)
-        raise RuntimeError(
-            f"LLM report generation failed: {llm_error}. "
-            "Check PERPLEXITY_API_KEY in .env and verify the API is reachable."
-        ) from llm_error
-
-    if not response or not response.choices or not response.choices[0].message.content:
-        logger.error("Perplexity returned an empty or missing response")
-        raise RuntimeError(
-            "The LLM returned an empty response. "
-            "Check your PERPLEXITY_API_KEY and model name in .env."
-        )
-
-    text: str = response.choices[0].message.content
-    logger.info("Perplexity response received: %d characters", len(text))
-    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1605,7 +2310,7 @@ def _build_user_message(
     master_report_structure: str | None = None,
 ) -> str:
     """
-    Build the user-turn message for the Gemini conversation.
+    Build the user-turn message for the LLM conversation.
 
     The user message combines the task instruction and the evidence.
     Keeping the task instruction here (rather than only in the system prompt)
@@ -1680,6 +2385,15 @@ def _build_retry_user_message(
     """
     Build a second-pass instruction that fixes missing headings, contamination,
     SECTION 3 conditional-section violations, and/or missing citations.
+
+    Every issue type this builds an instruction for is a repairable narrative
+    issue — something the model's own prose/structure caused and can fix by
+    rewriting. It never asks the model to repair a deterministic evidence
+    block (a table always force-overwritten after generation, per
+    _DETERMINISTIC_TABLE_HEADINGS_BY_GROUP): callers exclude those tables from
+    citation_issues before calling this (see generate_report_sections()), and
+    missing_parts/banned_phrases/location_issues can only ever describe
+    genuine LLM narrative defects.
 
     Args:
         original_user_message: The original report-generation user message.

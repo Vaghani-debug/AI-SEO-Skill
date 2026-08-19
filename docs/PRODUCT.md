@@ -135,7 +135,6 @@ This ensures reliability and builds user trust.
 - SEO scoring
 - AI-generated recommendations
 - Business impact prioritization
-- Executive summary
 - Interactive AI chat based on the audit report
 
 #### Market & Competitive Research _(Cited, Bounded)_

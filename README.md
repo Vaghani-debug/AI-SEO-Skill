@@ -1,6 +1,6 @@
 # AI SEO Agent
 
-AI SEO Agent is a ready-to-use MVP for generating professional SEO audit reports from a website URL. It provides a small FastAPI web application with a browser UI, deterministic SEO evidence collection, Gemini-powered report writing, Markdown preview, JSON persistence, and downloadable PDF reports.
+AI SEO Agent is a ready-to-use MVP for generating professional SEO audit reports from a website URL. It provides a small FastAPI web application with a browser UI, deterministic SEO evidence collection, LLM-powered report writing (Gemini, Perplexity, or OpenAI — selectable via a single config switch), Markdown preview, JSON persistence, and downloadable PDF reports.
 
 The MVP is intentionally simple: enter a URL, run one audit, review the generated SEO report, and download the PDF.
 
@@ -10,7 +10,8 @@ The MVP is intentionally simple: enter a URL, run one audit, review the generate
 - Website URL validation and normalization, including bare domains such as `example.com`
 - Homepage, `robots.txt`, and `sitemap.xml` fetching
 - Deterministic extraction of visible SEO evidence, including metadata, headings, links, images, canonical tags, robots data, and sitemap data
-- Gemini-generated Markdown audit report based only on verified evidence
+- LLM-generated Markdown audit report based only on verified evidence, with a configurable provider (Gemini, Perplexity, or OpenAI)
+- Live-web-search research (keyword, competitor, authority, and local-demand claims) backed by each provider's real citations — a claim is discarded unless its source URL was actually returned by the provider's search
 - Professional PDF report generation with ReportLab
 - Local JSON and PDF report storage in `reports/`
 - REST API endpoints with interactive Swagger documentation
@@ -24,7 +25,7 @@ The MVP is intentionally simple: enter a URL, run one audit, review the generate
 - Pydantic and Pydantic Settings
 - HTTPX
 - Beautiful Soup and lxml
-- Google Gemini SDK
+- LLM providers: Google Gemini (`google-genai`), Perplexity, and OpenAI (`openai`) — selected at runtime via `LLM_PROVIDER`
 - ReportLab
 - pytest
 
@@ -32,7 +33,7 @@ The MVP is intentionally simple: enter a URL, run one audit, review the generate
 
 - Windows, macOS, or Linux
 - Python 3.12 or newer
-- A Google Gemini API key
+- An API key for at least one supported LLM provider (Gemini, Perplexity, or OpenAI)
 - Git, if cloning the repository
 
 ## Quick Start
@@ -54,9 +55,10 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-3. Create a `.env` file in the project root:
+3. Create a `.env` file in the project root (copy `.env.example` as a starting point, then fill in the key for whichever provider you select):
 
 ```env
+LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.5-flash
 FETCH_TIMEOUT_SECONDS=15
@@ -140,16 +142,36 @@ Interactive API documentation is available at:
 
 ## Configuration
 
-Configuration is loaded from environment variables and an optional `.env` file in the project root.
+Configuration is loaded from environment variables and an optional `.env` file in the project root. See `.env.example` for the full list with defaults.
+
+`LLM_PROVIDER` is the single switch that selects the active provider everywhere (report generation and research). Set it to `gemini`, `perplexity`, or `openai`, and configure the matching API key below — no other code or config changes are needed to switch providers. An invalid value is rejected at startup; a missing API key for the selected provider raises a clear configuration error at call time.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `GEMINI_API_KEY` | Yes | Empty | Google Gemini API key used to generate reports. |
-| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model used for report generation. |
+| `LLM_PROVIDER` | No | `gemini` | Active LLM provider: `gemini`, `perplexity`, or `openai`. |
+| `GEMINI_API_KEY` | If provider is `gemini` | Empty | Google Gemini API key. |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model used for report generation and research. |
+| `GEMINI_THINKING_LEVEL` | No | `high` | Gemini reasoning depth (`low`/`high`) — higher improves multi-step SEO reasoning at the cost of latency/tokens. |
+| `PERPLEXITY_API_KEY` | If provider is `perplexity` | Empty | Perplexity API key. |
+| `PERPLEXITY_MODEL` | No | `sonar-pro` | Perplexity model — always search-grounded, so every call includes live citations. |
+| `OPENAI_API_KEY` | If provider is `openai` | Empty | OpenAI API key. |
+| `OPENAI_MODEL` | No | `gpt-5.6` | OpenAI model used via the Responses API. |
+| `OPENAI_REASONING_EFFORT` | No | `medium` | OpenAI Responses API reasoning effort. |
+| `OPENAI_SEARCH_CONTEXT_SIZE` | No | `high` | OpenAI web_search tool context size (`low`/`medium`/`high`) — higher favors thorough research coverage over token cost and latency. |
 | `FETCH_TIMEOUT_SECONDS` | No | `15` | Timeout for outbound website fetch requests. |
 | `FETCH_MAX_REDIRECTS` | No | `5` | Maximum redirects followed while fetching a site. |
 | `REPORTS_DIR` | No | `reports` | Local directory for generated JSON and PDF reports. |
 | `DEBUG` | No | `false` | Enables development logging and debug behavior. |
+
+### Live-search cost, latency, and citations
+
+Research calls (keyword, competitor, authority, and local-demand claims) always use each provider's live web search, which costs more tokens/time than a plain report call:
+
+- **Gemini**: research calls add the `google_search` tool; report-writing calls stay tool-free.
+- **Perplexity**: `sonar-pro` is always search-grounded, so both report and research calls are equally search-backed — no separate toggle.
+- **OpenAI**: research calls force the Responses API `web_search` tool (`tool_choice=required`); `OPENAI_SEARCH_CONTEXT_SIZE` trades thoroughness for cost/latency.
+
+Every research claim must cite a source URL that the provider's own search actually returned. A claim whose `source_url` does not match one of the provider's real citations is discarded rather than shown in the report, to prevent the LLM from inventing sources.
 
 Do not commit `.env` files or API keys.
 
@@ -204,7 +226,8 @@ src/
 		fetch_service.py       Homepage, robots.txt, and sitemap fetching
 		extractor_service.py   Deterministic SEO evidence extraction
 		prompt_loader.py       Runtime loading of report guidance files
-		report_service.py      Gemini-backed Markdown report generation
+		llm_service.py          Provider-neutral LLM boundary (Gemini/Perplexity/OpenAI adapters)
+		report_service.py      LLM-backed Markdown report generation (via llm_service)
 		pdf_service.py         PDF rendering
 	static/
 		index.html             Browser UI
@@ -231,9 +254,9 @@ python -m pytest test/test_audit_api.py -v
 
 ## Troubleshooting
 
-### The app starts, but audits fail with a Gemini API key error
+### The app starts, but audits fail with an LLM API key error
 
-Confirm `.env` exists in the project root and contains `GEMINI_API_KEY`.
+Confirm `.env` exists in the project root and contains the API key matching your `LLM_PROVIDER` setting (`GEMINI_API_KEY`, `PERPLEXITY_API_KEY`, or `OPENAI_API_KEY`).
 
 ### The browser says it cannot reach the audit server
 

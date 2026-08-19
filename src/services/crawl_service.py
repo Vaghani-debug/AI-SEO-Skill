@@ -39,7 +39,7 @@ from src.services.extractor_service import (
     extract,
 )
 from src.services.pagespeed_service import fetch_performance_evidence
-from src.services.fetch_service import FetchedResource, SiteFetchResult, fetch_site
+from src.services.fetch_service import FetchedResource, SiteFetchResult, fetch_site, retry_on_transient_failure
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +399,16 @@ async def _crawl_page(
     disallow_rules: list[str],
     settings: Settings,
 ) -> FetchedResource:
-    """Fetch and validate one sampled page URL; never raises."""
+    """
+    Fetch and validate one sampled page URL; never raises.
+
+    Same-origin and robots.txt Disallow checks are static and never retried.
+    The HTTP request itself reuses fetch_service's shared retry/backoff
+    policy (retry_on_transient_failure), so a 429/5xx response or network
+    error is retried up to settings.fetch_retry_attempts times before this
+    page's status is treated as final — a serious HTTP issue is only
+    confirmed (is_confirmed_transient_failure) after repeated observations.
+    """
     if urlparse(url).netloc.lower() != base_netloc:
         return FetchedResource(
             url=url, label="sampled_page", is_fetched=True, is_success=False,
@@ -412,6 +421,16 @@ async def _crawl_page(
             error_message="Skipped: blocked by a robots.txt Disallow rule",
         )
 
+    return await retry_on_transient_failure(
+        lambda: _attempt_crawl_page(client, url, settings),
+        retry_attempts=settings.fetch_retry_attempts,
+        backoff_base_seconds=settings.fetch_retry_backoff_base_seconds,
+        context=url,
+    )
+
+
+async def _attempt_crawl_page(client: httpx.AsyncClient, url: str, settings: Settings) -> FetchedResource:
+    """Make one HTTP attempt at a sampled page URL, applying content-type/size checks; never raises."""
     try:
         response: httpx.Response = await client.get(url, timeout=settings.fetch_timeout_seconds)
     except httpx.HTTPError as exc:

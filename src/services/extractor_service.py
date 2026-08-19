@@ -316,6 +316,7 @@ def build_page_evidence(resource: FetchedResource, page_type: PageType, base_url
         images=images,
 
         redirect_chain=list(resource.redirect_chain),
+        attempt_count=resource.attempt_count,
     )
 
 

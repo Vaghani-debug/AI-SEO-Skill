@@ -18,6 +18,7 @@ Run with:
 """
 
 import json  # Used to write fixture JSON files for the GET retrieval tests
+import re  # Used to extract PART/SECTION headings from LLM user_message text in fake_generate_text
 import uuid  # Used to pin start_audit()'s generated job/audit_id in job-tracking tests
 from datetime import datetime, timezone  # For constructing fixture ReportResult objects
 from pathlib import Path  # Used to create fixture PDF and JSON files in tmp_path
@@ -27,6 +28,8 @@ import pytest  # Test runner
 from fastapi.testclient import TestClient  # Synchronous HTTP test client for FastAPI
 
 from src.main import app  # The FastAPI application under test
+from src.services.prompt_loader import PromptContext  # Used to build a real (non-mocked) template for the new pipeline
+from test.fixtures.frozen_audit_context import build_frozen_audit_context  # Step 18's frozen, anonymized AuditContext
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +119,30 @@ def _mock_json_path(tmp_path: Path, audit_id: str, url: str = "https://example.c
     }
     json_path.write_text(json.dumps(data), encoding="utf-8")
     return json_path
+
+
+# A real (non-mocked) PromptContext with a simplified template covering every
+# _SECTION_GROUPS heading, used only by the real deterministic-block pipeline test below —
+# not the full production MASTER_REPORT_STRUCTURE.md, whose SECTION 3 sub-heading wording
+# is unrelated to what this test verifies.
+_NEW_PIPELINE_PROMPT_CONTEXT = PromptContext(
+    audit_prompt="Audit {{website_url}}.",
+    seo_skill="Priority: Crawlability, Technical, On-Page, Content.",
+    master_report_structure=(
+        "# PART 1: FULL WEBSITE AUDIT\n\nBody.\n\n"
+        "# PART 2: TECHNICAL SEO AUDIT\n\nBody.\n\n"
+        "# PART 3: ON-PAGE & CONTENT AUDIT\n\nBody.\n\n"
+        "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\nBody.\n\n"
+        "# SECTION 2: COMPETITOR ANALYSIS\n\nBody.\n\n"
+        "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+        "## 3.1 Applicability Assessment\nBody.\n"
+        "## 3.2 Local Location Opportunities\nBody.\n"
+        "## 3.3 Audience & Market Expansion Opportunities\nNot applicable.\n\n"
+        "# SECTION 4: STRUCTURED DATA RECOMMENDATIONS\n\nBody.\n\n"
+        "# SECTION 5: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n"
+    ),
+    ai_guidelines="Never invent findings. Use verified evidence only.",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +238,7 @@ def _patch_new_pipeline(tmp_path: Path, audit_id: str = "test-audit-id-002"):
             ),
             patch(
                 "src.api.routes.audit.generate_report_sections",
-                new=AsyncMock(return_value={"executive_summary": "..."}),
+                new=AsyncMock(return_value={"site_inventory": "..."}),
             ),
             patch(
                 "src.api.routes.audit.assemble_and_validate_report",
@@ -261,6 +288,51 @@ class TestStartAuditNewPipeline:
         assert response.status_code == 202
         assert "Partial content" in response.json()["markdown_report"]
 
+    def test_new_pipeline_report_is_built_from_real_deterministic_blocks(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """
+        End-to-end through the real generate_report_sections()/assemble_and_validate_report(),
+        fed Step 18's frozen AuditContext, with only the underlying LLM call mocked. Proves the
+        assembled report's factual content (page URLs, robots directive, competitor name,
+        keyword text) comes from real deterministic renderers/injection over real evidence —
+        not merely whatever text a mocked ReportResult/assembled object happened to contain.
+        """
+        audit_id = "frozen-fixture-audit-0001"
+        pdf_path = _mock_pdf_path(tmp_path, audit_id)
+        context = build_frozen_audit_context()
+
+        async def fake_generate_text(system_prompt: str, user_message: str, settings) -> str:
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+            if any(h.startswith("# SECTION 3:") for h in headings):
+                return (
+                    "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+                    "## 3.1 Applicability Assessment\n\nLocal business serving Austin, TX.\n\n"
+                    "## 3.2 Local Location Opportunities\n\nGenerated narrative.\n\n"
+                    "## 3.3 Audience & Market Expansion Opportunities\n\nNot applicable.\n"
+                )
+            return "\n\n".join(f"{h}\n\nGenerated narrative for this section." for h in headings)
+
+        with (
+            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
+            patch("src.api.routes.audit._settings.use_new_report_pipeline", True),
+            patch("src.api.routes.audit.load_prompt_context", return_value=_NEW_PIPELINE_PROMPT_CONTEXT),
+            patch("src.api.routes.audit.build_site_evidence", new=AsyncMock(return_value=MagicMock())),
+            patch("src.api.routes.audit.build_audit_context", new=AsyncMock(return_value=context)),
+            patch("src.services.report_service.generate_text", side_effect=fake_generate_text),
+            patch("src.api.routes.audit.generate_pdf", return_value=pdf_path),
+        ):
+            response = client.post("/api/v1/audits/", json={"url": "https://sample-bakery-co.test"})
+
+        assert response.status_code == 202
+        markdown_report = response.json()["markdown_report"]
+
+        # Deterministic block proof — none of this text is in fake_generate_text's output.
+        assert "https://sample-bakery-co.test/services/custom-cakes" in markdown_report  # Core/Subpages Table
+        assert "/cart/" in markdown_report  # robots.txt Disallow rule, rendered verbatim
+        assert "Anonymized Competitor Bakery" in markdown_report  # Competitor Overview Table
+        assert "artisan sourdough bread austin" in markdown_report  # Primary Keywords Table
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/audits/ — success cases
@@ -274,6 +346,30 @@ class TestStartAuditSuccess:
         with _patch_full_pipeline(tmp_path):
             response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
         assert response.status_code == 202  # 202 Accepted for async-style operations
+
+    def test_legacy_pipeline_never_calls_new_pipeline_functions(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """
+        With use_new_report_pipeline explicitly False (the shipped default), the legacy
+        one-shot flow runs unchanged and none of the new sampled-crawl/section-generation
+        functions are ever touched.
+        """
+        with (
+            _patch_full_pipeline(tmp_path),
+            patch("src.api.routes.audit._settings.use_new_report_pipeline", False),
+            patch("src.api.routes.audit.build_site_evidence") as build_site_evidence_mock,
+            patch("src.api.routes.audit.build_audit_context") as build_audit_context_mock,
+            patch("src.api.routes.audit.generate_report_sections") as generate_sections_mock,
+            patch("src.api.routes.audit.assemble_and_validate_report") as assemble_mock,
+        ):
+            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
+
+        assert response.status_code == 202
+        build_site_evidence_mock.assert_not_called()
+        build_audit_context_mock.assert_not_called()
+        generate_sections_mock.assert_not_called()
+        assemble_mock.assert_not_called()
 
     def test_response_contains_audit_id(self, client: TestClient, tmp_path: Path) -> None:
         """The response body contains a non-empty audit_id."""

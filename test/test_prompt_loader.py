@@ -366,10 +366,14 @@ class TestRealFileContent:
         result = load_prompt_context()
         assert "pdf" in result.master_report_structure.lower()
 
-    def test_master_report_structure_mentions_executive_summary(self) -> None:
-        """MASTER_REPORT_STRUCTURE.md must describe an Executive Summary section."""
+    def test_master_report_structure_ends_at_section_five(self) -> None:
+        """The canonical report must exclude the removed Sections 6-8."""
         result = load_prompt_context()
-        assert "executive summary" in result.master_report_structure.lower()
+        content = result.master_report_structure.lower()
+        assert "section 5: off-page seo & geo strategy" in content
+        assert "section 6:" not in content
+        assert "section 7:" not in content
+        assert "section 8:" not in content
 
 
 # ---------------------------------------------------------------------------

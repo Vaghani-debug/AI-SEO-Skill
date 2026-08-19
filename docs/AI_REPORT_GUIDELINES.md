@@ -341,41 +341,7 @@ Never label everything as Critical.
 
 ---
 
-# 11. AI Executive Summary
-
-Every report begins with an executive summary.
-
-Maximum length
-
-400 words
-
-Audience
-
-Business owner
-
-Project manager
-
-Marketing manager
-
-Structure
-
-Current website health
-
-Strengths
-
-Weaknesses
-
-Business risks
-
-Immediate priorities
-
-Overall recommendation
-
-The executive summary must avoid unnecessary technical language.
-
----
-
-# 12. Top Priorities
+# 11. Top Priorities
 
 After every audit,
 AI should identify:

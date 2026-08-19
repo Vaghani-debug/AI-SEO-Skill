@@ -22,7 +22,8 @@ Public interface:
 import asyncio  # asyncio.gather runs multiple fetches concurrently to reduce total audit time
 import logging  # Standard logging; every fetch attempt is logged at INFO or WARNING level
 import re  # re.compile used to find Sitemap: lines in robots.txt
-from dataclasses import dataclass, field  # dataclass builds lightweight immutable result containers
+from collections.abc import Awaitable, Callable  # Type hints for the shared retry loop's attempt callback
+from dataclasses import dataclass, field, replace  # replace() attaches the final attempt_count without mutating the result
 from urllib.parse import urljoin  # urljoin safely combines a base URL with a relative path
 
 import httpx  # httpx is the async HTTP client; replaces requests for async contexts
@@ -104,6 +105,11 @@ class FetchedResource:
 
     redirect_chain: list[str] = field(default_factory=list)
     # Intermediate URLs visited before final_url, in order; empty if no redirect occurred
+
+    attempt_count: int = 1
+    # How many HTTP attempts produced this result (see retry_on_transient_failure()); a value
+    # greater than 1 means retries were exhausted or a retry eventually succeeded, not that a
+    # single request was made more than once for no reason.
 
 
 @dataclass
@@ -265,13 +271,87 @@ async def fetch_site(normalized_url: str, settings: Settings) -> SiteFetchResult
 _TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 
-def _is_transient_failure(resource: FetchedResource) -> bool:
-    """True when a retry might succeed: 429/5xx responses, timeouts, or connection errors."""
-    if resource.status_code in _TRANSIENT_STATUS_CODES:
+def is_transient_status_code(status_code: int) -> bool:
+    """
+    True for HTTP status codes that a retry might reasonably fix (429/5xx).
+
+    Public so callers that only have a bare status code — e.g. analysis_service.py
+    deciding how to word a PageEvidence finding — can apply the same rule used by
+    is_transient_failure() without re-declaring the status code set.
+    """
+    return status_code in _TRANSIENT_STATUS_CODES
+
+
+def is_transient_failure(resource: FetchedResource) -> bool:
+    """
+    True when a retry might succeed: 429/5xx responses, timeouts, or connection errors.
+
+    Public (not module-private) so other services — e.g. crawl_service.py's
+    sampled-page crawl — can reuse the exact same retry-eligibility rule
+    instead of re-implementing it.
+    """
+    if is_transient_status_code(resource.status_code):
         return True
     # status_code stays 0 when no HTTP response was received at all (timeout/DNS/connection
     # error) — except redirect-limit failures, which will fail identically on every retry
     return resource.status_code == 0 and "redirect" not in resource.error_message.lower()
+
+
+def is_confirmed_transient_failure(resource: FetchedResource) -> bool:
+    """
+    True only when a transient-eligible failure (429/5xx/network error) persisted
+    across every retry attempt — as opposed to a single, unretried observation.
+
+    Callers (report rendering) use this to distinguish a confirmed, repeatable
+    HTTP problem from a one-off blip that retrying already tried to rule out.
+    A resource with attempt_count == 1 was never actually retried (either it
+    succeeded immediately, failed non-transiently, or retries were disabled),
+    so it cannot be "confirmed" by repetition.
+    """
+    return resource.attempt_count > 1 and is_transient_failure(resource)
+
+
+async def retry_on_transient_failure(
+    attempt: Callable[[], Awaitable[FetchedResource]],
+    *,
+    retry_attempts: int,
+    backoff_base_seconds: float,
+    context: str = "",
+) -> FetchedResource:
+    """
+    Call attempt() once, then keep retrying while the result is a transient
+    failure, using the same exponential backoff policy as fetch_site().
+
+    This is the single retry/backoff implementation shared by every caller
+    that fetches over HTTP during an audit (fetch_service's own resource
+    fetches and crawl_service's sampled-page crawl), so retry eligibility
+    and backoff timing can never drift between them.
+
+    Args:
+        attempt: A zero-argument async callable that makes exactly one HTTP
+            attempt and returns a FetchedResource; never raises.
+        retry_attempts: Maximum attempts before giving up (1 = no retry).
+        backoff_base_seconds: Base delay for exponential backoff between attempts.
+        context: A URL or label used only for log messages.
+
+    Returns:
+        The final FetchedResource, with attempt_count set to the number of
+        HTTP attempts actually made.
+    """
+    result: FetchedResource = await attempt()
+
+    attempts_made = 1
+    while attempts_made < retry_attempts and is_transient_failure(result):
+        delay = backoff_base_seconds * (2 ** (attempts_made - 1))
+        logger.warning(
+            "Transient failure fetching %s (attempt %d/%d), retrying in %.1fs: %s",
+            context, attempts_made, retry_attempts, delay, result.error_message or result.status_code,
+        )
+        await asyncio.sleep(delay)
+        result = await attempt()
+        attempts_made += 1
+
+    return replace(result, attempt_count=attempts_made)
 
 
 async def _fetch_resource(
@@ -305,20 +385,12 @@ async def _fetch_resource(
     Returns:
         FetchedResource with populated fields; is_success=False on any failure.
     """
-    result: FetchedResource = await _attempt_fetch(client, url, label, timeout)
-
-    attempt = 1
-    while attempt < retry_attempts and _is_transient_failure(result):
-        delay = backoff_base_seconds * (2 ** (attempt - 1))
-        logger.warning(
-            "Transient failure fetching %s (attempt %d/%d), retrying in %.1fs: %s",
-            url, attempt, retry_attempts, delay, result.error_message or result.status_code,
-        )
-        await asyncio.sleep(delay)
-        result = await _attempt_fetch(client, url, label, timeout)
-        attempt += 1
-
-    return result
+    return await retry_on_transient_failure(
+        lambda: _attempt_fetch(client, url, label, timeout),
+        retry_attempts=retry_attempts,
+        backoff_base_seconds=backoff_base_seconds,
+        context=url,
+    )
 
 
 async def _attempt_fetch(

@@ -36,6 +36,7 @@ from src.services.fetch_service import fetch_site  # Fetches homepage, robots.tx
 from src.services.pdf_service import generate_pdf  # Converts Markdown report to a PDF file
 from src.services.prompt_loader import PromptContext, load_prompt_context  # Loads guidance files from disk
 from src.services.report_service import (  # Report generation — old one-shot flow and the new section pipeline
+    ReportIntegrityError,
     ReportResult,
     assemble_and_validate_report,
     build_audit_context,
@@ -69,7 +70,7 @@ router = APIRouter(
     summary="Start an SEO audit",
     description=(
         "Accepts a website URL, fetches the site, extracts verified SEO data, "
-        "generates a Markdown report using Gemini, saves a PDF, and returns the "
+        "generates a Markdown report using the configured LLM provider, saves a PDF, and returns the "
         "completed report with a PDF download URL."
     ),
     responses={
@@ -216,7 +217,7 @@ async def _generate_report_legacy_pipeline(
 ) -> ReportResult:
     """
     Original one-shot flow: fetch the homepage only, extract AuditEvidence,
-    and generate the whole report in a single Gemini call.
+    and generate the whole report in a single LLM call.
     """
     try:
         site = await fetch_site(normalized_url, _settings)
@@ -258,10 +259,10 @@ async def _generate_report_legacy_pipeline(
             audit_id=audit_id,
         )
         # report_service substitutes the URL, assembles the system prompt,
-        # calls Gemini, and returns a ReportResult with audit_id and markdown_report
+        # calls the configured LLM provider, and returns a ReportResult with audit_id and markdown_report
     except ValueError as api_key_error:
         # API key not configured — configuration error
-        logger.error("Gemini API key error: %s", api_key_error)
+        logger.error("LLM API key error: %s", api_key_error)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(api_key_error),  # Message says to add the key to .env
@@ -283,10 +284,13 @@ async def _generate_report_new_pipeline(
     research it into one AuditContext, generate each report section, then
     assemble and validate the whole document.
 
-    A validation failure does not raise — assemble_and_validate_report()
-    already retried each section once inside generate_report_sections(), so
-    this just logs the checkpoint's issues and returns the best assembled
-    Markdown rather than blocking the audit on imperfect output.
+    A narrative validation failure does not raise — generate_report_sections()
+    already retried each section once and substitutes a safe deterministic
+    fallback narrative if it still fails, so this just logs the checkpoint's
+    remaining issues and returns the assembled Markdown rather than blocking
+    the audit on imperfect prose. A deterministic-block integrity failure
+    (see ReportIntegrityError) is different: it can only be a pipeline bug,
+    so it does raise and this route turns it into a clean 500.
     """
     try:
         site_evidence = await build_site_evidence(normalized_url, _settings)
@@ -316,7 +320,17 @@ async def _generate_report_new_pipeline(
             detail=f"Report generation failed: {llm_error}",
         )
 
-    assembled = assemble_and_validate_report(sections, prompt_context.master_report_structure, context)
+    try:
+        assembled = assemble_and_validate_report(sections, prompt_context.master_report_structure, context)
+    except ReportIntegrityError as integrity_error:
+        # A deterministic block failed to survive assembly intact — always a
+        # pipeline bug, never an LLM content issue, so this fails the request
+        # rather than returning a silently corrupt report.
+        logger.error("Report integrity check failed for audit %s: %s", context.audit_id, integrity_error)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Report generation failed an internal consistency check. Please try again or contact support.",
+        )
     if not assembled.is_valid:
         # Checkpoint status only — the report is still returned to the user
         logger.warning(

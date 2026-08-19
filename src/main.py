@@ -30,7 +30,7 @@ from src.api.routes.audit import router as audit_router  # Import the audit rout
 logger = logging.getLogger(__name__)  # __name__ resolves to "src.main" in log output
 
 # Load settings once at module import time; all configuration comes from here
-settings = get_settings()  # Reads GEMINI_API_KEY, reports_dir, timeouts, etc. from .env
+settings = get_settings()  # Reads the configured LLM provider's API key, reports_dir, timeouts, etc. from .env
 
 # ---------------------------------------------------------------------------
 # Logging configuration

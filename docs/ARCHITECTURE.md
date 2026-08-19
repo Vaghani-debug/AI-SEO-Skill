@@ -38,7 +38,6 @@ The AI is responsible for:
 - Performing SEO analysis.
 - Generating an SEO score.
 - Creating technical and business recommendations.
-- Producing an executive summary.
 - Answering user questions regarding the generated report.
 - Suggesting implementation priorities.
 

@@ -279,6 +279,11 @@ class PageEvidence:
     redirect_chain: list[str] = field(default_factory=list)
     # Intermediate URLs visited before reaching the final response, empty if no redirect
 
+    attempt_count: int = 1
+    # How many HTTP attempts produced this page's http_status (see fetch_service.py's
+    # retry_on_transient_failure()); used to decide whether a non-200 status is confirmed
+    # or just a single, unconfirmed observation (analysis_service.py).
+
 
 @dataclass
 class SiteEvidence:
@@ -389,6 +394,19 @@ class ScoreBreakdown:
 # ---------------------------------------------------------------------------
 
 
+class ResearchStatus(str, Enum):
+    """Outcome of one bounded research operation."""
+
+    SUCCESS = "success"
+    NO_RESULTS = "no_results"
+    PARSE_FAILED = "parse_failed"
+    CITATION_FAILED = "citation_failed"
+    PROVIDER_FAILED = "provider_failed"
+    INSUFFICIENT_LOCATION_EVIDENCE = "insufficient_location_evidence"
+    # Deterministic (no LLM call made): the business was classified as local/service-area,
+    # but no city_or_region signal was found in crawl evidence - never faked with a placeholder region.
+
+
 @dataclass
 class ResearchClaim:
     """
@@ -418,6 +436,118 @@ class ResearchClaim:
 
 
 @dataclass
+class KeywordOpportunity:
+    """
+    One typed primary or long-tail keyword opportunity with mandatory
+    provenance, matching Section 1's Primary/Long-Tail Keywords Table columns.
+    """
+
+    keyword: str
+    search_intent: str
+    source_url: str
+    source_title: str
+    retrieved_date: str
+
+    estimated_volume: str | None = None
+    # A sourced monthly search volume estimate as text (e.g. "1,000-10,000/mo"); None when no
+    # citable estimate exists - a volume figure is never fabricated to fill this field.
+
+    target_page: str | None = None
+    # The most relevant existing page path on the site for this keyword; None if none fits.
+
+
+@dataclass
+class KeywordResearchResult:
+    """Typed keyword opportunities plus an explicit outcome, preserving why none were returned."""
+
+    status: ResearchStatus
+    opportunities: list[KeywordOpportunity] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
+class CompetitorOverview:
+    """
+    One typed real competitor with mandatory provenance, matching Section 2's
+    Competitor Overview Table columns. website must be a citation-verified
+    real URL - a competitor is never accepted on self-reported text alone.
+    """
+
+    competitor_name: str
+    website: str
+    focus: str
+    source_url: str
+    source_title: str
+    retrieved_date: str
+
+    estimated_authority: str | None = None
+    # A sourced authority signal as free text (e.g. "High", "Domain Authority ~45"); None
+    # when no citable estimate exists - never fabricated to fill this field.
+
+
+@dataclass
+class CompetitorResearchResult:
+    """Typed competitor overviews plus an explicit outcome, preserving why none were returned."""
+
+    status: ResearchStatus
+    competitors: list[CompetitorOverview] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
+class CompetitorGap:
+    """
+    One typed competitive gap/keyword-position row, matching Section 2's
+    Keyword Gap Table columns. Only ever derived from already-accepted
+    (citation-verified) competitors - never an invented competitor.
+    """
+
+    keyword: str
+    competitor_position: str
+    your_gap: str
+    source_url: str
+    source_title: str
+    retrieved_date: str
+
+
+@dataclass
+class CompetitorGapResult:
+    """Typed competitive gaps plus an explicit outcome, preserving why none were returned."""
+
+    status: ResearchStatus
+    gaps: list[CompetitorGap] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
+class LocationOpportunity:
+    """
+    One typed local-demand/location row, matching Section 3's Location
+    Opportunity Table columns. city_or_region always comes from deterministic
+    classify_local_business() evidence, never invented by the LLM.
+    """
+
+    city_or_region: str
+    primary_keyword: str
+    priority: str
+    source_url: str
+    source_title: str
+    retrieved_date: str
+
+    estimated_volume: str | None = None
+    # A sourced monthly search volume estimate as text; None when no citable estimate exists.
+
+
+@dataclass
+class LocationResearchResult:
+    """Typed location opportunities plus an explicit outcome, preserving why none were returned."""
+
+    status: ResearchStatus
+    opportunities: list[LocationOpportunity] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
 class ResearchBundle:
     """
     All externally researched claims for one audit, grouped by category.
@@ -428,9 +558,10 @@ class ResearchBundle:
     assembly).
     """
 
-    keyword_opportunities: list[ResearchClaim] = field(default_factory=list)
-    competitors: list[ResearchClaim] = field(default_factory=list)
-    competitor_analysis: list[ResearchClaim] = field(default_factory=list)
+    primary_keywords: list[KeywordOpportunity] = field(default_factory=list)
+    long_tail_keywords: list[KeywordOpportunity] = field(default_factory=list)
+    competitors: list[CompetitorOverview] = field(default_factory=list)
+    competitor_analysis: list[CompetitorGap] = field(default_factory=list)
     authority_opportunities: list[ResearchClaim] = field(default_factory=list)
     brand_presence: list[ResearchClaim] = field(default_factory=list)
     # Cited evidence of where the brand is already visible online (directories, social
@@ -439,11 +570,98 @@ class ResearchBundle:
     # deliberately NOT implemented here: no free, verified data source exists for them, and
     # guessing a number would violate the report's "never invent backlinks" rule.
 
-    local_demand: list[ResearchClaim] = field(default_factory=list)
+    local_demand: list[LocationOpportunity] = field(default_factory=list)
     # Empty unless the site was classified as local/service-area with a known region
 
     audience_expansion: list[ResearchClaim] = field(default_factory=list)
     # Empty for local/service-area sites; populated instead of local_demand otherwise
+
+    research_statuses: dict[str, ResearchStatus] = field(default_factory=dict)
+    # Maps each field name above (e.g. "primary_keywords") to its outcome status, so a
+    # genuine zero-result search (no_results) can be told apart from a provider/parse/citation
+    # failure (provider_failed/parse_failed/citation_failed) even though both leave that field's
+    # list empty. A category absent from this map was never run (e.g. local_demand for a
+    # non-local business).
+
+
+# ---------------------------------------------------------------------------
+# Report-facing evidence projections
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PageReportRow:
+    """Verified page fields available to deterministic report renderers."""
+
+    url: str
+    page_type: PageType
+    was_crawled: bool
+
+    http_status: int | None = None
+    page_title: str | None = None
+    meta_description: str | None = None
+    canonical_url: str | None = None
+    page_language: str | None = None
+    meta_robots: str | None = None
+
+    h1_tags: list[str] = field(default_factory=list)
+    h2_tags: list[str] = field(default_factory=list)
+    word_count: int | None = None
+    schema_types: list[str] = field(default_factory=list)
+    internal_links: list[str] = field(default_factory=list)
+    external_links: list[str] = field(default_factory=list)
+    redirect_chain: list[str] = field(default_factory=list)
+
+    used_playwright_fallback: bool = False
+    source_sitemap: str | None = None
+    sitemap_lastmod: str | None = None
+
+    attempt_count: int = 1
+    # Mirrors PageEvidence.attempt_count for crawled pages (see build_page_seo_notes()'s
+    # confirmed-vs-unconfirmed HTTP status rule); stays at the default for sitemap-only rows,
+    # which were never fetched.
+
+
+@dataclass
+class InventorySectionData:
+    """Deterministic input for the Core Pages and Subpages report tables."""
+
+    core_pages: list[PageReportRow] = field(default_factory=list)
+    subpages: list[PageReportRow] = field(default_factory=list)
+    sitemap_only_pages: list[PageReportRow] = field(default_factory=list)
+    total_discovered: int = 0
+    total_analyzed: int = 0
+
+
+@dataclass
+class TechnicalSectionData:
+    """Verified technical evidence and deterministic findings for Part 2."""
+
+    findings: list[Finding] = field(default_factory=list)
+    robots_txt: RobotsTxtEvidence | None = None
+    sitemaps: list[SitemapEvidence] = field(default_factory=list)
+    performance: PerformanceEvidence | None = None
+    detected_schema_types: list[str] = field(default_factory=list)
+    pages: list[PageReportRow] = field(default_factory=list)
+
+
+@dataclass
+class OnPageSectionData:
+    """Verified homepage, priority-page, and content evidence for Part 3."""
+
+    homepage: PageReportRow
+    priority_pages: list[PageReportRow] = field(default_factory=list)
+    on_page_findings: list[Finding] = field(default_factory=list)
+    content_findings: list[Finding] = field(default_factory=list)
+
+
+@dataclass
+class ResearchResult:
+    """Claims plus an explicit outcome, preserving why no claims were returned."""
+
+    status: ResearchStatus
+    claims: list[ResearchClaim] = field(default_factory=list)
+    error: str | None = None
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,7 @@ Usage:
 """
 
 from functools import lru_cache  # lru_cache lets us create a singleton settings object without a global variable
+from typing import Literal  # Literal restricts llm_provider to the three supported values at load time
 
 from pydantic import Field  # Field lets us set defaults and descriptions for each setting
 from pydantic_settings import BaseSettings  # BaseSettings reads fields from environment variables automatically
@@ -39,6 +40,11 @@ class Settings(BaseSettings):
         description="Gemini model name to use for LLM report generation",
     )
 
+    gemini_thinking_level: str = Field(
+        default="high",  # Higher thinking level improves multi-step SEO reasoning at the cost of latency/tokens
+        description="Gemini generation_config thinking_level (e.g. 'low', 'high') for report and research calls",
+    )
+
     # --- LLM / Perplexity -------------------------------------------------
     perplexity_api_key: str = Field(
         default="",  # Empty default so the app starts without crashing; a missing key is caught at report generation time
@@ -49,9 +55,32 @@ class Settings(BaseSettings):
         description="Perplexity model name to use for LLM report generation",
     )
 
-    llm_provider: str = Field(
-        default="gemini",  # Change to "perplexity" in .env to route all LLM calls to Perplexity
-        description="LLM provider to use: 'gemini' or 'perplexity'",
+    # --- LLM / OpenAI -------------------------------------------------------
+
+    openai_api_key: str = Field(
+        default="",  # Empty default so the app starts without crashing; a missing key is caught at call time
+        description="OpenAI API key loaded from OPENAI_API_KEY in .env",
+    )
+
+    openai_model: str = Field(
+        default="gpt-5.6",  # Current flagship model with Responses API web_search tool support
+        description="OpenAI model name to use for LLM report generation and research (Responses API)",
+    )
+
+    openai_reasoning_effort: str = Field(
+        default="medium",  # One of: none, minimal, low, medium, high, xhigh, max
+        description="OpenAI Responses API reasoning effort for report and research calls",
+    )
+
+    openai_search_context_size: str = Field(
+        default="high",  # One of: low, medium, high — "high" favors thorough SEO research coverage over token cost
+        description="OpenAI Responses API web_search tool search_context_size for research calls",
+    )
+
+    # llm_provider is the single switch: change only this value (and its matching api key) to swap providers everywhere
+    llm_provider: Literal["perplexity", "gemini", "openai"] = Field(
+        default="gemini",  # Change to "perplexity", "gemini", or "openai" in .env to select the active provider
+        description="LLM provider to use: 'gemini', 'perplexity', or 'openai'",
     )
 
     perplexity_retry_attempts: int = Field(
@@ -62,6 +91,17 @@ class Settings(BaseSettings):
     perplexity_retry_backoff_base_seconds: float = Field(
         default=1.0,  # Exponential backoff: 1.0s, 2.0s, 4.0s, ... between retry attempts
         description="Base delay in seconds for exponential backoff between Perplexity retry attempts",
+    )
+
+    # Shared across Gemini/OpenAI adapters (Perplexity keeps its own dedicated fields above)
+    llm_retry_attempts: int = Field(
+        default=3,  # Same shape as perplexity_retry_attempts, generalized for the other two providers
+        description="Maximum attempts for a single Gemini/OpenAI call before giving up on transient failures",
+    )
+
+    llm_retry_backoff_base_seconds: float = Field(
+        default=1.0,  # Exponential backoff: 1.0s, 2.0s, 4.0s, ... between retry attempts
+        description="Base delay in seconds for exponential backoff between Gemini/OpenAI retry attempts",
     )
 
     # --- HTTP Fetch ----------------------------------------------------------

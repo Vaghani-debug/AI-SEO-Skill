@@ -25,6 +25,9 @@ in this MVP and are not scored.
 
 Public interface:
     analyze_site(evidence: SiteEvidence) -> ScoreBreakdown
+    build_page_seo_notes(page: PageReportRow) -> list[str]
+    build_homepage_element_rows(homepage: PageReportRow) -> list[tuple[str, str, str, str]]
+    build_priority_page_row(page: PageReportRow) -> tuple[str, str, str, str, str]
 """
 
 import logging
@@ -34,10 +37,12 @@ from src.services.audit_models import (
     EffortLevel,
     Finding,
     PageEvidence,
+    PageReportRow,
     ScoreBreakdown,
     Severity,
     SiteEvidence,
 )
+from src.services.fetch_service import is_transient_status_code
 
 logger = logging.getLogger(__name__)
 
@@ -166,17 +171,7 @@ def _check_technical_seo(evidence: SiteEvidence, pages: list[PageEvidence]) -> l
         ))
 
     if homepage.http_status != 200:
-        findings.append(Finding(
-            category=_CATEGORY_TECHNICAL,
-            title=f"Homepage returned HTTP {homepage.http_status} instead of 200",
-            severity=Severity.CRITICAL,
-            description=f"The homepage responded with status code {homepage.http_status}.",
-            business_impact="Search engines may fail to index the homepage, and visitors following links may see an error instead of the site.",
-            recommendation="Investigate server logs and fix whatever is causing the non-200 response on the homepage.",
-            effort=EffortLevel.HIGH,
-            evidence_urls=[homepage.url],
-            score_deduction=30.0,
-        ))
+        findings.append(_homepage_status_finding(homepage))
 
     robots = evidence.robots_txt
     if robots is None or not robots.is_accessible:
@@ -256,6 +251,100 @@ def _check_technical_seo(evidence: SiteEvidence, pages: list[PageEvidence]) -> l
             score_deduction=50.0,
         ))
 
+    findings.extend(_check_sampled_page_http_status(evidence.sampled_pages))
+
+    return findings
+
+
+def _is_unconfirmed_transient_status(page: PageEvidence) -> bool:
+    """
+    True when a non-200 status is retry-eligible (429/5xx) but was observed only
+    once (attempt_count <= 1) and so was never confirmed by a retry. A status
+    that isn't retry-eligible at all (e.g. a real 404) is stable regardless of
+    attempt count and is never treated as unconfirmed here. Note: used_playwright_fallback
+    is deliberately not considered — the browser fallback only ever runs after a
+    successful fetch (to render JS-shell pages), so it says nothing about whether
+    a non-200 HTTP status is stable and must not be treated as such.
+    """
+    return is_transient_status_code(page.http_status) and page.attempt_count <= 1
+
+
+def _homepage_status_finding(homepage: PageEvidence) -> Finding:
+    """
+    Build the homepage non-200 status Finding, worded by evidence confidence: a
+    confirmed failure (retried and still failing, or a status a retry can't fix)
+    is a real, urgent finding; a transient-eligible status seen only once is a
+    neutral, unconfirmed note rather than an imperative claim.
+    """
+    if _is_unconfirmed_transient_status(homepage):
+        return Finding(
+            category=_CATEGORY_TECHNICAL,
+            title=f"Homepage returned HTTP {homepage.http_status} on a single, unconfirmed observation",
+            severity=Severity.MEDIUM,
+            description=(
+                f"The homepage responded with status code {homepage.http_status} once; this was not "
+                "confirmed by a retry, so it may have been a transient server issue rather than a "
+                "persistent problem."
+            ),
+            business_impact="If this status recurs, search engines may fail to index the homepage and visitors may see an error instead of the site.",
+            recommendation="Re-check the homepage's HTTP status; investigate server logs only if it recurs.",
+            effort=EffortLevel.LOW,
+            evidence_urls=[homepage.url],
+            score_deduction=10.0,
+        )
+    return Finding(
+        category=_CATEGORY_TECHNICAL,
+        title=f"Homepage returned HTTP {homepage.http_status} instead of 200",
+        severity=Severity.CRITICAL,
+        description=f"The homepage responded with status code {homepage.http_status}.",
+        business_impact="Search engines may fail to index the homepage, and visitors following links may see an error instead of the site.",
+        recommendation="Investigate server logs and fix whatever is causing the non-200 response on the homepage.",
+        effort=EffortLevel.HIGH,
+        evidence_urls=[homepage.url],
+        score_deduction=30.0,
+    )
+
+
+def _check_sampled_page_http_status(sampled_pages: list[PageEvidence]) -> list[Finding]:
+    """
+    Flag sampled pages with a non-200 HTTP status, split by evidence confidence:
+    a confirmed failure (retried and still failing, or a status a retry can't
+    fix) becomes a real finding; a transient-eligible status observed only once
+    becomes a neutral, unconfirmed note and must not claim urgency.
+    """
+    non_200_pages = [page for page in sampled_pages if page.http_status != 200]
+    if not non_200_pages:
+        return []
+
+    confirmed = [page for page in non_200_pages if not _is_unconfirmed_transient_status(page)]
+    unconfirmed = [page for page in non_200_pages if _is_unconfirmed_transient_status(page)]
+    total = len(sampled_pages)
+
+    findings: list[Finding] = []
+    if confirmed:
+        findings.append(Finding(
+            category=_CATEGORY_TECHNICAL,
+            title=f"{len(confirmed)} sampled page(s) returned a confirmed non-200 HTTP status",
+            severity=Severity.HIGH,
+            description="These pages returned a non-200 status that persisted across retries, or a status a retry cannot fix (e.g. 404).",
+            business_impact="Search engines may fail to index these pages, and visitors following links may see an error instead of content.",
+            recommendation="Investigate server logs, or fix or remove the broken links, for each affected page.",
+            effort=EffortLevel.MEDIUM,
+            evidence_urls=_capped([page.url for page in confirmed]),
+            score_deduction=_proportional_deduction(len(confirmed), total, 20.0),
+        ))
+    if unconfirmed:
+        findings.append(Finding(
+            category=_CATEGORY_TECHNICAL,
+            title=f"{len(unconfirmed)} sampled page(s) returned a non-200 status on a single, unconfirmed observation",
+            severity=Severity.LOW,
+            description="These pages returned a retry-eligible status (e.g. 429/5xx) only once; it was not confirmed by a retry, so it may have been a transient server blip.",
+            business_impact="If this recurs consistently, it could affect indexing and user experience.",
+            recommendation="Re-check these pages; investigate server logs only if the status recurs.",
+            effort=EffortLevel.LOW,
+            evidence_urls=_capped([page.url for page in unconfirmed]),
+            score_deduction=_proportional_deduction(len(unconfirmed), total, 5.0),
+        ))
     return findings
 
 
@@ -609,3 +698,204 @@ def _check_security(evidence: SiteEvidence) -> list[Finding]:
         ))
 
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Per-page SEO notes (deterministic report rendering — src/services/report_service.py)
+# ---------------------------------------------------------------------------
+
+_SEO_NOTE_COUNT = 3
+# MASTER_REPORT_STRUCTURE.md's SEO Notes cells require exactly three bullets per page.
+
+
+def build_page_seo_notes(page: PageReportRow) -> list[str]:
+    """
+    Build exactly three deterministic, evidence-backed SEO notes for one
+    crawled page. Each of 8 checks — confirmed HTTP/indexability, title,
+    description, H1, canonical, content depth, internal links, applicable
+    schema — reports whether it found a real issue. Real issues are
+    surfaced first, in that priority order, up to three; if fewer than
+    three issues exist, the remaining slots are filled (in the same
+    priority order) with a confirmation note from the checks that passed,
+    so a healthy page still receives three real, evidence-backed notes
+    instead of an invented one.
+
+    Only call this for crawled rows (page.was_crawled); sitemap-only rows
+    have no verified per-page fields and must never receive page-specific
+    SEO notes (MASTER_REPORT_STRUCTURE.md PART 1).
+    """
+    checks: list[tuple[bool, str]] = [
+        _http_indexability_check(page),
+        _title_check(page),
+        _description_check(page),
+        _h1_check(page),
+        _canonical_check(page),
+        _content_depth_check(page),
+        _internal_links_check(page),
+        _schema_check(page),
+    ]
+    issue_notes = [note for is_issue, note in checks if is_issue]
+    if len(issue_notes) >= _SEO_NOTE_COUNT:
+        return issue_notes[:_SEO_NOTE_COUNT]
+    healthy_notes = [note for is_issue, note in checks if not is_issue]
+    return (issue_notes + healthy_notes)[:_SEO_NOTE_COUNT]
+
+
+def _http_indexability_check(page: PageReportRow) -> tuple[bool, str]:
+    status = page.http_status
+    if status is not None and status != 200:
+        if is_transient_status_code(status) and page.attempt_count <= 1:
+            return True, f"Returned HTTP {status} on a single, unconfirmed observation — recheck if this recurs."
+        return True, f"Returned HTTP {status} instead of 200 (confirmed) — this blocks indexing until fixed."
+    if page.meta_robots and "noindex" in page.meta_robots.lower():
+        return True, "Has a noindex directive blocking this page from search results."
+    return False, "Returns HTTP 200 and is not blocked from indexing."
+
+
+def _title_check(page: PageReportRow) -> tuple[bool, str]:
+    title = page.page_title
+    if not title:
+        return True, "Missing a <title> tag — add a unique, descriptive title."
+    length = len(title)
+    if not (_MIN_TITLE_LENGTH <= length <= _MAX_TITLE_LENGTH):
+        return True, f"Title tag is {length} characters, outside the recommended {_MIN_TITLE_LENGTH}-{_MAX_TITLE_LENGTH} range."
+    return False, f"Title tag length ({length} characters) is within the recommended range."
+
+
+def _description_check(page: PageReportRow) -> tuple[bool, str]:
+    description = page.meta_description
+    if not description:
+        return True, "Missing a meta description — add a unique, compelling summary."
+    length = len(description)
+    if not (_MIN_META_DESCRIPTION_LENGTH <= length <= _MAX_META_DESCRIPTION_LENGTH):
+        return True, (
+            f"Meta description is {length} characters, outside the recommended "
+            f"{_MIN_META_DESCRIPTION_LENGTH}-{_MAX_META_DESCRIPTION_LENGTH} range."
+        )
+    return False, f"Meta description length ({length} characters) is within the recommended range."
+
+
+def _h1_check(page: PageReportRow) -> tuple[bool, str]:
+    count = len(page.h1_tags)
+    if count == 0:
+        return True, "Missing an H1 heading."
+    if count > 1:
+        return True, f"Has {count} H1 headings — use exactly one clear H1."
+    return False, "Has exactly one clear H1 heading."
+
+
+def _canonical_check(page: PageReportRow) -> tuple[bool, str]:
+    if not page.canonical_url:
+        return True, "Missing a canonical tag."
+    return False, "Has a canonical tag."
+
+
+def _content_depth_check(page: PageReportRow) -> tuple[bool, str]:
+    word_count = page.word_count or 0
+    if word_count < _THIN_CONTENT_WORD_COUNT:
+        return True, f"Only {word_count} words of visible content — expand for topical depth."
+    return False, f"{word_count} words of visible content meets the recommended depth."
+
+
+def _internal_links_check(page: PageReportRow) -> tuple[bool, str]:
+    count = len(page.internal_links)
+    if count == 0:
+        return True, "No internal links found on this page."
+    return False, f"Has {count} internal link(s) to other pages on the site."
+
+
+def _schema_check(page: PageReportRow) -> tuple[bool, str]:
+    if not page.schema_types:
+        return True, "No structured data (schema.org) detected on this page."
+    return False, f"Uses {', '.join(page.schema_types)} structured data."
+
+
+# ---------------------------------------------------------------------------
+# Homepage/priority-page element rows (deterministic report rendering — PART 3)
+# ---------------------------------------------------------------------------
+
+
+def _title_element(page: PageReportRow) -> tuple[str, str, str]:
+    """Return (current, issue, recommendation) for a page's title tag."""
+    title = page.page_title
+    if not title:
+        return "Missing", "Missing", "Add a unique, descriptive title tag (10-60 characters)."
+    length = len(title)
+    if not (_MIN_TITLE_LENGTH <= length <= _MAX_TITLE_LENGTH):
+        return (
+            title,
+            f"{length} characters (outside {_MIN_TITLE_LENGTH}-{_MAX_TITLE_LENGTH})",
+            f"Rewrite the title to fall within {_MIN_TITLE_LENGTH}-{_MAX_TITLE_LENGTH} characters.",
+        )
+    return title, "None", "No change needed."
+
+
+def _description_element(page: PageReportRow) -> tuple[str, str, str]:
+    """Return (current, issue, recommendation) for a page's meta description."""
+    description = page.meta_description
+    if not description:
+        return "Missing", "Missing", "Add a unique, compelling meta description (50-160 characters)."
+    length = len(description)
+    if not (_MIN_META_DESCRIPTION_LENGTH <= length <= _MAX_META_DESCRIPTION_LENGTH):
+        return (
+            description,
+            f"{length} characters (outside {_MIN_META_DESCRIPTION_LENGTH}-{_MAX_META_DESCRIPTION_LENGTH})",
+            f"Rewrite the meta description to fall within {_MIN_META_DESCRIPTION_LENGTH}-{_MAX_META_DESCRIPTION_LENGTH} characters.",
+        )
+    return description, "None", "No change needed."
+
+
+def _h1_element(page: PageReportRow) -> tuple[str, str, str]:
+    """Return (current, issue, recommendation) for a page's H1 heading(s)."""
+    count = len(page.h1_tags)
+    if count == 0:
+        return "Missing", "Missing", "Add exactly one clear H1 heading."
+    current = "; ".join(page.h1_tags)
+    if count > 1:
+        return current, f"{count} H1 headings found", "Use exactly one clear H1 heading."
+    return current, "None", "No change needed."
+
+
+def _canonical_element(page: PageReportRow) -> tuple[str, str, str]:
+    """Return (current, issue, recommendation) for a page's canonical tag."""
+    if not page.canonical_url:
+        return "Missing", "Missing", "Add a self-referencing canonical tag."
+    return page.canonical_url, "None", "No change needed."
+
+
+def build_homepage_element_rows(homepage: PageReportRow) -> list[tuple[str, str, str, str]]:
+    """
+    Build (element, current, issue, recommendation) rows for PART 3.1's
+    Homepage Elements Table, using only verified fields from `homepage`.
+    """
+    elements: list[tuple[str, tuple[str, str, str]]] = [
+        ("Title Tag", _title_element(homepage)),
+        ("Meta Description", _description_element(homepage)),
+        ("H1 Heading", _h1_element(homepage)),
+        ("Canonical Tag", _canonical_element(homepage)),
+    ]
+    return [(element, current, issue, recommendation) for element, (current, issue, recommendation) in elements]
+
+
+def build_priority_page_row(page: PageReportRow) -> tuple[str, str, str, str, str]:
+    """
+    Build (url, title_issue, description_issue, heading_issue, recommendation)
+    for one row of PART 3.2's Priority Pages Table. `recommendation` combines
+    every non-"None" element recommendation for this page, or states that no
+    action is needed when no element issue was found.
+    """
+    _, title_issue, title_recommendation = _title_element(page)
+    _, description_issue, description_recommendation = _description_element(page)
+    _, heading_issue, heading_recommendation = _h1_element(page)
+
+    recommendations = [
+        recommendation
+        for issue, recommendation in (
+            (title_issue, title_recommendation),
+            (description_issue, description_recommendation),
+            (heading_issue, heading_recommendation),
+        )
+        if issue != "None"
+    ]
+    recommendation = " ".join(recommendations) if recommendations else "No immediate action needed."
+    return page.url, title_issue, description_issue, heading_issue, recommendation

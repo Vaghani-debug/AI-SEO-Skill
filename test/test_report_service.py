@@ -3,8 +3,9 @@ test/test_report_service.py
 
 Unit tests for src/services/report_service.py.
 
-All Gemini API calls are mocked so these tests run offline without tokens.
-Each test exercises one specific behaviour, error path, or formatting rule.
+All LLM calls go through llm_service.generate_text(), which is mocked here so
+these tests run offline without tokens. Each test exercises one specific
+behaviour, error path, or formatting rule.
 
 Run with:
     pytest test/test_report_service.py -v
@@ -20,13 +21,20 @@ from src.config import Settings  # Provides API key and model configuration
 from src.services.audit_models import (
     AuditContext,
     CategoryScore,
+    CompetitorGap,
+    CompetitorOverview,
     EffortLevel,
     Finding,
+    InventorySectionData,
+    KeywordOpportunity,
+    LocationOpportunity,
     PageEvidence,
+    PageReportRow,
     PageType,
     PerformanceEvidence,
     ResearchBundle,
     ResearchClaim,
+    ResearchStatus,
     ScoreBreakdown,
     Severity,
     SiteEvidence,
@@ -39,32 +47,75 @@ from src.services.extractor_service import (
     RobotsTxtEvidence,   # robots.txt findings
     SitemapEvidence,     # Sitemap accessibility
 )
+from src.services.llm_service import LLMProviderError  # Raised on empty/failed LLM responses
 from src.services.prompt_loader import PromptContext  # Guidance context
+from src.services.report_data_service import (  # Step 15 — well-formed-report test fixtures
+    build_inventory_section_data,
+    build_on_page_section_data,
+    build_technical_section_data,
+)
 from src.services.report_service import (
     ReportResult,               # Return type
     AssembledReportResult,      # Phase 4 — assemble+validate checkpoint result
+    ReportIntegrityError,       # Step 16 — raised when a deterministic block fails validation
     assemble_and_validate_report,  # Phase 4 — assemble+validate checkpoint entry point
     assemble_report_markdown,   # Phase 4 — assembles section dict into one final report
     validate_assembled_report,  # Phase 4 — report-level validation entry point
     _build_retry_user_message,  # Internal helper — retry instruction builder
     _build_section_user_message,  # Internal helper — Phase 4 per-section user message builder
+    _build_fallback_section_markdown,  # Internal helper — Step 16 deterministic fallback narrative builder
     _build_user_message,       # Internal helper — evidence formatting
     _deduplicate_table_rows,   # Internal helper — Phase 4/16 duplicate table row removal
+    _derive_page_name,         # Internal helper — Step 6 deterministic page name from URL
+    _DETERMINISTIC_ONLY_GROUPS,  # Internal constant — Step 9 LLM-bypass group set
+    _escape_table_cell,        # Internal helper — Step 6 pipe-escaping for table cells
     _extract_part_templates,   # Internal helper — Phase 4 per-PART template slicing
     _extract_section_body,     # Internal helper — subsection text extraction
     _find_banned_phrases,      # Internal helper — contamination/branding detection
     _find_table_blocks,        # Internal helper — Markdown table detection
     _format_evidence,          # Internal helper — evidence formatting
     _format_section_evidence,  # Internal helper — Phase 4 section-scoped evidence slicing
+    _inject_competitor_tables,  # Internal helper — Step 14 forces SECTION 2.1/2.2 tables
+    _inject_inventory_tables,  # Internal helper — Step 9 forces PART 1.1/1.2 tables
+    _inject_keyword_tables,    # Internal helper — Step 14 forces SECTION 1.1/1.2 tables
+    _inject_location_table,    # Internal helper — Step 14 forces SECTION 3.2 table
+    _missing_required_report_parts,  # Internal helper — required PART heading detection
+    _render_page_inventory_table,  # Internal helper — Step 6 shared table renderer
+    _render_research_status_note,  # Internal helper — Step 14 empty-table availability narrative
+    _render_technical_and_onpage_section,  # Internal helper — Step 9 deterministic PART 2/3 renderer
+    _replace_heading_block,    # Internal helper — Step 9 forces content under a heading
     _split_table_row,          # Internal helper — Markdown table row parsing
     _SECTION_GROUPS,           # Internal constant — Phase 4 section group definitions
     _validate_citation_columns,  # Internal helper — Source/Retrieved validation
-    build_source_register,     # Phase 4 — deterministic PART 11.3 Source Register Table builder
+    _validate_deterministic_blocks_present,  # Internal helper — Step 15 re-render/verbatim-match validator
+    _validate_deterministic_integrity,  # Internal helper — Step 16 raise-worthy subset of deterministic checks
+    _validate_inventory_table_coverage,  # Internal helper — Step 15 exactly-once inventory coverage validator
+    _validate_no_unconfirmed_http_claims,  # Internal helper — Step 15 unhedged transient-status validator
+    _validate_removed_sections_absent,  # Internal helper — Step 15 Section 6-8 absence validator
+    _validate_seo_notes_cell_counts,  # Internal helper — Step 15 exactly-3-<li> validator
     generate_report_sections,  # Phase 4 sequential section-generation pipeline
+    _find_table_after_heading,  # Internal helper — Step 15 heading-scoped table lookup
     _validate_location_section,  # Internal helper — PART 7 conditional validation
     build_audit_context,       # Public function under test — Phase 4 context builder
     generate_report,           # Public function under test
+    render_competitor_gap_table,  # Step 14 — deterministic SECTION 2.2 Keyword Gap Table renderer
+    render_competitor_overview_table,  # Step 14 — deterministic SECTION 2.1 renderer
+    render_core_pages_table,   # Step 6 — deterministic PART 1.1 Core Pages Table renderer
+    render_content_quality_section,  # Step 8 — deterministic PART 3.3 renderer
+    render_critical_high_issues_table,  # Step 7 — deterministic PART 2.1 Issues Table renderer
+    render_homepage_elements_table,  # Step 8 — deterministic PART 3.1 renderer
+    render_indexability_section,  # Step 7 — deterministic PART 2.5 renderer
+    render_location_opportunity_table,  # Step 14 — deterministic SECTION 3.2 renderer
+    render_long_tail_keywords_table,  # Step 14 — deterministic SECTION 1.2 renderer
+    render_pagespeed_section,  # Step 7 — deterministic PART 2.4 renderer
+    render_primary_keywords_table,  # Step 14 — deterministic SECTION 1.1 renderer
+    render_priority_pages_table,  # Step 8 — deterministic PART 3.2 renderer
+    render_robots_txt_section,  # Step 7 — deterministic PART 2.2 renderer
+    render_schema_section,     # Step 7 — deterministic PART 2.6 renderer
+    render_sitemap_section,    # Step 7 — deterministic PART 2.3 renderer
+    render_subpages_table,     # Step 6 — deterministic PART 1.2 Subpages Table renderer
 )
+from test.fixtures.frozen_audit_context import build_frozen_audit_context  # Step 18/20 — frozen provider-parity fixture
 
 
 # ---------------------------------------------------------------------------
@@ -164,15 +215,9 @@ def _make_evidence(
     )
 
 
-def _make_gemini_mock(response_text: str = "# SEO Report\n\nTest report.") -> MagicMock:
-    """Create a mock Gemini model that returns the given text."""
-    mock_response = MagicMock()  # Mock response object
-    mock_response.text = response_text  # The LLM output text
-
-    mock_model = MagicMock()  # Mock GenerativeModel instance
-    mock_model.generate_content.return_value = mock_response  # Sync call returns response
-
-    return mock_model
+def _make_gemini_mock(response_text: str = "# SEO Report\n\nTest report.") -> AsyncMock:
+    """Create a mock generate_text() dispatcher call that returns the given text."""
+    return AsyncMock(return_value=response_text)
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +230,9 @@ class TestGenerateReportSuccess:
     async def test_returns_report_result(self, settings: Settings, prompt_context: PromptContext) -> None:
         """generate_report() returns a ReportResult on success."""
         evidence = _make_evidence()
-        mock_model = _make_gemini_mock("# SEO Report\n\n## Executive Summary\n\nGood site.")
+        mock_generate_text = _make_gemini_mock("# SEO Report\n\n## Executive Summary\n\nGood site.")
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model  # Inject mock model
-
+        with patch("src.services.report_service.generate_text", mock_generate_text):
             result = await generate_report("https://example.com", evidence, prompt_context, settings)
 
         assert isinstance(result, ReportResult)  # Correct return type
@@ -198,11 +241,9 @@ class TestGenerateReportSuccess:
         """markdown_report field contains the LLM response text."""
         expected_markdown = "# SEO Report\n\nThis is the report."
         evidence = _make_evidence()
-        mock_model = _make_gemini_mock(expected_markdown)
+        mock_generate_text = _make_gemini_mock(expected_markdown)
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", mock_generate_text):
             result = await generate_report("https://example.com", evidence, prompt_context, settings)
 
         assert result.markdown_report == expected_markdown  # LLM text stored exactly
@@ -210,11 +251,9 @@ class TestGenerateReportSuccess:
     async def test_audit_id_is_unique_uuid(self, settings: Settings, prompt_context: PromptContext) -> None:
         """Each call produces a different, valid UUID4 audit_id."""
         evidence = _make_evidence()
-        mock_model = _make_gemini_mock("# Report")
+        mock_generate_text = _make_gemini_mock("# Report")
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", mock_generate_text):
             result1 = await generate_report("https://example.com", evidence, prompt_context, settings)
             result2 = await generate_report("https://example.com", evidence, prompt_context, settings)
 
@@ -229,11 +268,9 @@ class TestGenerateReportSuccess:
     ) -> None:
         """A caller-supplied audit_id (e.g. from an already-created job) is used as-is."""
         evidence = _make_evidence()
-        mock_model = _make_gemini_mock("# Report")
+        mock_generate_text = _make_gemini_mock("# Report")
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", mock_generate_text):
             result = await generate_report(
                 "https://example.com", evidence, prompt_context, settings,
                 audit_id="fixed-job-id-123",
@@ -245,11 +282,9 @@ class TestGenerateReportSuccess:
         """normalized_url in the result matches the input URL."""
         url = "https://www.truelinesolution.com"
         evidence = _make_evidence(url=url)
-        mock_model = _make_gemini_mock("# Report")
+        mock_generate_text = _make_gemini_mock("# Report")
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", mock_generate_text):
             result = await generate_report(url, evidence, prompt_context, settings)
 
         assert result.normalized_url == url  # URL preserved exactly
@@ -257,11 +292,9 @@ class TestGenerateReportSuccess:
     async def test_created_at_is_datetime(self, settings: Settings, prompt_context: PromptContext) -> None:
         """created_at is a datetime object representing the audit completion time."""
         evidence = _make_evidence()
-        mock_model = _make_gemini_mock("# Report")
+        mock_generate_text = _make_gemini_mock("# Report")
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", mock_generate_text):
             result = await generate_report("https://example.com", evidence, prompt_context, settings)
 
         assert isinstance(result.created_at, datetime)  # Correct type
@@ -270,38 +303,18 @@ class TestGenerateReportSuccess:
         """{{website_url}} placeholder in the audit prompt is replaced with the real URL."""
         target_url = "https://www.specific-website.com"
         evidence = _make_evidence(url=target_url)
-        mock_model = _make_gemini_mock("# Report")
 
-        captured_calls: list[str] = []  # Record what is passed to generate_content
+        captured_calls: list[str] = []  # Record what is passed to generate_text
 
-        def capture_call(user_message: str) -> MagicMock:
+        async def capture_call(system_prompt: str, user_message: str, settings: Settings) -> str:
             captured_calls.append(user_message)  # Store the user message
-            r = MagicMock()
-            r.text = "# Report"
-            return r
+            return "# Report"
 
-        mock_model.generate_content.side_effect = capture_call
-
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", side_effect=capture_call):
             await generate_report(target_url, evidence, prompt_context, settings)
 
         # The URL should appear in the user message passed to the LLM
         assert target_url in captured_calls[0]
-
-    async def test_gemini_configured_with_api_key(self, settings: Settings, prompt_context: PromptContext) -> None:
-        """genai.configure() is called with the API key from settings."""
-        evidence = _make_evidence()
-        mock_model = _make_gemini_mock("# Report")
-
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            await generate_report("https://example.com", evidence, prompt_context, settings)
-
-        mock_genai.configure.assert_called_once_with(api_key=settings.gemini_api_key)
-        # Verify the API key is always passed before making a call
 
     async def test_retries_once_when_report_has_partial_required_parts(
         self, settings: Settings
@@ -341,22 +354,15 @@ class TestGenerateReportSuccess:
 
         call_index = 0
 
-        def generate_side_effect(_: str) -> MagicMock:
+        async def generate_side_effect(system_prompt: str, user_message: str, settings: Settings) -> str:
             nonlocal call_index
             call_index += 1
-            response = MagicMock()
-            response.text = first_response if call_index == 1 else second_response
-            return response
+            return first_response if call_index == 1 else second_response
 
-        mock_model = MagicMock()
-        mock_model.generate_content.side_effect = generate_side_effect
-
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", side_effect=generate_side_effect) as mock_generate:
             result = await generate_report("https://example.com", evidence, ctx, settings)
 
-        assert mock_model.generate_content.call_count == 2
+        assert mock_generate.call_count == 2
         assert result.markdown_report == second_response
 
     async def test_retries_once_when_report_contains_banned_phrases(
@@ -370,24 +376,17 @@ class TestGenerateReportSuccess:
 
         call_index = 0
 
-        def generate_side_effect(_: str) -> MagicMock:
+        async def generate_side_effect(system_prompt: str, user_message: str, settings: Settings) -> str:
             nonlocal call_index
             call_index += 1
-            response = MagicMock()
-            response.text = first_response if call_index == 1 else second_response
-            return response
+            return first_response if call_index == 1 else second_response
 
-        mock_model = MagicMock()
-        mock_model.generate_content.side_effect = generate_side_effect
-
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
+        with patch("src.services.report_service.generate_text", side_effect=generate_side_effect) as mock_generate:
             result = await generate_report(
                 "https://example.com", evidence, prompt_context, settings
             )
 
-        assert mock_model.generate_content.call_count == 2
+        assert mock_generate.call_count == 2
         assert result.markdown_report == second_response
 
 
@@ -618,6 +617,29 @@ class TestValidateCitationColumns:
         )
         assert _validate_citation_columns(report) == []
 
+    def test_excludes_a_table_under_a_named_heading(self) -> None:
+        report = (
+            "### Primary Keywords Table\n\n"
+            "| Keyword | Source | Retrieved |\n"
+            "|---------|--------|-----------|\n"
+            "| seo tips |  |  |\n"
+        )
+        assert _validate_citation_columns(report, exclude_table_headings=frozenset({"Primary Keywords Table"})) == []
+
+    def test_excluding_one_heading_still_flags_uncited_rows_elsewhere(self) -> None:
+        report = (
+            "### Primary Keywords Table\n\n"
+            "| Keyword | Source | Retrieved |\n"
+            "|---------|--------|-----------|\n"
+            "| seo tips |  |  |\n\n"
+            "### Some Other Table\n\n"
+            "| Keyword | Source | Retrieved |\n"
+            "|---------|--------|-----------|\n"
+            "| more tips |  |  |\n"
+        )
+        issues = _validate_citation_columns(report, exclude_table_headings=frozenset({"Primary Keywords Table"}))
+        assert len(issues) == 1
+
 
 # ---------------------------------------------------------------------------
 # Tests for generate_report() — error paths
@@ -636,47 +658,26 @@ class TestGenerateReportErrors:
         with pytest.raises(ValueError, match="GEMINI_API_KEY"):
             await generate_report("https://example.com", evidence, prompt_context, s)
 
-    async def test_llm_network_error_raises_runtime_error(
+    async def test_llm_call_failure_propagates(
         self, settings: Settings, prompt_context: PromptContext
     ) -> None:
-        """RuntimeError is raised and wrapped when the Gemini SDK raises an exception."""
+        """A provider call failure (wrapped as LLMProviderError by the adapter) propagates unchanged."""
         evidence = _make_evidence()
+        broken = AsyncMock(side_effect=LLMProviderError("Gemini call failed: connection refused"))
 
-        mock_model = MagicMock()
-        mock_model.generate_content.side_effect = Exception("Network error: connection refused")
-
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            with pytest.raises(RuntimeError, match="LLM report generation failed"):
+        with patch("src.services.report_service.generate_text", broken):
+            with pytest.raises(LLMProviderError, match="Gemini call failed"):
                 await generate_report("https://example.com", evidence, prompt_context, settings)
 
-    async def test_empty_llm_response_raises_runtime_error(
+    async def test_empty_llm_response_raises_provider_error(
         self, settings: Settings, prompt_context: PromptContext
     ) -> None:
-        """RuntimeError is raised when the LLM returns an empty text response."""
+        """LLMProviderError is raised when the LLM returns an empty text response."""
         evidence = _make_evidence()
-        mock_model = _make_gemini_mock("")  # Empty text — blocked or no content
+        broken = AsyncMock(side_effect=LLMProviderError("The gemini LLM returned an empty response."))
 
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            with pytest.raises(RuntimeError, match="empty response"):
-                await generate_report("https://example.com", evidence, prompt_context, settings)
-
-    async def test_none_llm_response_raises_runtime_error(
-        self, settings: Settings, prompt_context: PromptContext
-    ) -> None:
-        """RuntimeError is raised when the LLM returns None."""
-        evidence = _make_evidence()
-
-        mock_model = MagicMock()
-        mock_model.generate_content.return_value = None  # SDK returned None
-
-        with patch("src.services.report_service.genai") as mock_genai:
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            with pytest.raises(RuntimeError):
+        with patch("src.services.report_service.generate_text", broken):
+            with pytest.raises(LLMProviderError, match="empty response"):
                 await generate_report("https://example.com", evidence, prompt_context, settings)
 
 
@@ -926,20 +927,48 @@ def _make_claim(claim: str = "Claim", value: str = "Value") -> ResearchClaim:
     )
 
 
+def _make_keyword_opportunity(keyword: str = "Keyword", search_intent: str = "commercial") -> KeywordOpportunity:
+    return KeywordOpportunity(
+        keyword=keyword, search_intent=search_intent, source_url="https://example.com/source",
+        source_title="Source", retrieved_date="2026-08-04",
+    )
+
+
+def _make_competitor(competitor_name: str = "Joe's Bakery", website: str = "https://joesbakery.com") -> CompetitorOverview:
+    return CompetitorOverview(
+        competitor_name=competitor_name, website=website, focus="Wholesale bread",
+        source_url="https://example.com/source", source_title="Source", retrieved_date="2026-08-04",
+    )
+
+
+def _make_gap(keyword: str = "Keyword", your_gap: str = "No online ordering") -> CompetitorGap:
+    return CompetitorGap(
+        keyword=keyword, competitor_position="Ranks #2", your_gap=your_gap,
+        source_url="https://example.com/source", source_title="Source", retrieved_date="2026-08-04",
+    )
+
+
+def _make_location_opportunity(city_or_region: str = "Austin, TX") -> LocationOpportunity:
+    return LocationOpportunity(
+        city_or_region=city_or_region, primary_keyword="bakery near me", priority="High",
+        source_url="https://example.com/source", source_title="Source", retrieved_date="2026-08-04",
+    )
+
+
 class TestSectionGroups:
 
     def test_covers_every_part_and_section_heading_exactly_once(self) -> None:
         all_headings = [heading for _, headings in _SECTION_GROUPS for heading in headings]
         assert sorted(all_headings) == sorted(
-            [f"PART {n}" for n in range(1, 4)] + [f"SECTION {n}" for n in range(1, 9)]
+            [f"PART {n}" for n in range(1, 4)] + [f"SECTION {n}" for n in range(1, 6)]
         )
         assert len(all_headings) == len(set(all_headings))
 
-    def test_has_five_to_seven_groups(self) -> None:
-        assert 5 <= len(_SECTION_GROUPS) <= 7
+    def test_has_six_groups(self) -> None:
+        assert len(_SECTION_GROUPS) == 6
 
-    def test_executive_summary_is_last(self) -> None:
-        assert _SECTION_GROUPS[-1][0] == "executive_summary"
+    def test_technical_and_onpage_is_the_only_deterministic_only_group(self) -> None:
+        assert _DETERMINISTIC_ONLY_GROUPS == frozenset({"technical_and_onpage"})
 
 
 class TestFormatSectionEvidence:
@@ -981,38 +1010,37 @@ class TestFormatSectionEvidence:
         assert "Largest Contentful Paint (LCP): 2.2s" in text
         assert "LCP needs improvement" in text
 
-    def test_structured_data_and_execution_no_longer_includes_performance_findings(self) -> None:
+    def test_structured_data_and_off_page_excludes_performance_findings(self) -> None:
         findings = [_make_finding("Performance", title="LCP needs improvement")]
         context = _make_context(score_breakdown=ScoreBreakdown(overall_score=70.0, findings=findings))
-        text = _format_section_evidence("structured_data_and_execution", context)
+        text = _format_section_evidence("structured_data_and_off_page", context)
         assert "LCP needs improvement" not in text
 
     def test_keyword_strategy_formats_claims_with_citation(self) -> None:
-        research = ResearchBundle(keyword_opportunities=[_make_claim("Keyword", "sourdough bread austin")])
+        research = ResearchBundle(primary_keywords=[_make_keyword_opportunity("Keyword", "commercial")])
         text = _format_section_evidence("keyword_strategy", _make_context(research=research))
-        assert "sourdough bread austin" in text
+        assert "Keyword" in text
         assert "Source" in text and "retrieved 2026-08-04" in text
 
     def test_keyword_strategy_empty_message(self) -> None:
         text = _format_section_evidence("keyword_strategy", _make_context())
-        assert "No keyword opportunities were found" in text
+        assert "No primary keyword opportunities were found" in text
 
     def test_competitor_analysis_includes_both_lists(self) -> None:
         research = ResearchBundle(
-            competitors=[_make_claim("Competitor", "Joe's Bakery")],
-            competitor_analysis=[_make_claim("Gap", "No online ordering")],
+            competitors=[_make_competitor("Joe's Bakery")],
+            competitor_analysis=[_make_gap(your_gap="No online ordering")],
         )
         text = _format_section_evidence("competitor_analysis", _make_context(research=research))
         assert "Joe's Bakery" in text
         assert "No online ordering" in text
 
     def test_location_section_uses_local_demand_when_local_with_region(self) -> None:
-        research = ResearchBundle(local_demand=[_make_claim("Demand", "High")])
+        research = ResearchBundle(local_demand=[_make_location_opportunity("Austin, TX")])
         context = _make_context(research=research, is_local_business=True, city_or_region="Austin, TX")
         text = _format_section_evidence("location_or_market_expansion", context)
         assert "Local/service-area business" in text
         assert "Austin, TX" in text
-        assert "High" in text
 
     def test_location_section_uses_audience_expansion_when_not_local(self) -> None:
         research = ResearchBundle(audience_expansion=[_make_claim("Segment", "Wholesale bakeries")])
@@ -1021,38 +1049,33 @@ class TestFormatSectionEvidence:
         assert "Not local/service-area" in text
         assert "Wholesale bakeries" in text
 
-    def test_structured_data_and_execution_includes_authority_claims(self) -> None:
+    def test_location_section_reports_insufficient_location_evidence_when_local_with_no_region(self) -> None:
+        """
+        A local/service-area business with no detected region must get a distinct,
+        honest message - never silently reused non-local "Not local/service-area"
+        messaging or a fabricated placeholder region.
+        """
+        research = ResearchBundle(audience_expansion=[_make_claim("Segment", "Wholesale bakeries")])
+        context = _make_context(research=research, is_local_business=True, city_or_region=None)
+        text = _format_section_evidence("location_or_market_expansion", context)
+        assert "insufficient_location_evidence" in text
+        assert "Not local/service-area" not in text
+        assert "Wholesale bakeries" not in text
+
+
+    def test_structured_data_and_off_page_includes_authority_claims(self) -> None:
         research = ResearchBundle(authority_opportunities=[_make_claim("Directory", "Local business directory")])
-        text = _format_section_evidence("structured_data_and_execution", _make_context(research=research))
+        text = _format_section_evidence("structured_data_and_off_page", _make_context(research=research))
         assert "Local business directory" in text
 
-    def test_structured_data_and_execution_includes_brand_presence_claims(self) -> None:
+    def test_structured_data_and_off_page_includes_brand_presence_claims(self) -> None:
         research = ResearchBundle(brand_presence=[_make_claim("Brand Presence", "Listed on Yelp")])
-        text = _format_section_evidence("structured_data_and_execution", _make_context(research=research))
+        text = _format_section_evidence("structured_data_and_off_page", _make_context(research=research))
         assert "Listed on Yelp" in text
 
-    def test_structured_data_and_execution_reports_no_brand_presence_message(self) -> None:
-        text = _format_section_evidence("structured_data_and_execution", _make_context())
+    def test_structured_data_and_off_page_reports_no_brand_presence_message(self) -> None:
+        text = _format_section_evidence("structured_data_and_off_page", _make_context())
         assert "No existing brand presence signals were found" in text
-
-    def test_executive_summary_includes_score_and_top_priority_findings(self) -> None:
-        findings = [
-            _make_finding("Technical SEO", severity=Severity.CRITICAL, title="Robots.txt blocks site"),
-            _make_finding("On-Page SEO", severity=Severity.LOW, title="Minor issue"),
-        ]
-        score_breakdown = ScoreBreakdown(
-            overall_score=55.0,
-            category_scores=[CategoryScore(category="Technical SEO", weight_percent=40.0, score=10.0)],
-            findings=findings,
-        )
-        text = _format_section_evidence("executive_summary", _make_context(score_breakdown=score_breakdown))
-        assert "Overall score: 55.0/100" in text
-        assert "Robots.txt blocks site" in text
-        assert "Minor issue" not in text  # Low severity — excluded from the top-priority slice
-
-    def test_executive_summary_no_priority_findings_message(self) -> None:
-        text = _format_section_evidence("executive_summary", _make_context())
-        assert "No Critical or High severity findings" in text
 
     def test_unknown_group_raises_value_error(self) -> None:
         with pytest.raises(ValueError):
@@ -1103,6 +1126,91 @@ class TestBuildSectionUserMessage:
         assert "Some evidence text" in msg
         assert "https://example.com" in msg
 
+    def test_omits_deterministic_table_note_by_default(self) -> None:
+        msg = _build_section_user_message(
+            "https://example.com", ("PART 3",), "Some evidence text", _SAMPLE_MASTER_REPORT_STRUCTURE,
+        )
+        assert "already finalized" not in msg
+
+    def test_includes_deterministic_table_note_when_supplied(self) -> None:
+        msg = _build_section_user_message(
+            "https://example.com", ("PART 3",), "Some evidence text", _SAMPLE_MASTER_REPORT_STRUCTURE,
+            deterministic_table_note="Core Pages Table is already finalized.",
+        )
+        assert "Core Pages Table is already finalized." in msg
+
+
+# ---------------------------------------------------------------------------
+# _replace_heading_block() / _inject_inventory_tables() — Step 9 table injection
+# ---------------------------------------------------------------------------
+
+class TestReplaceHeadingBlock:
+
+    def test_overwrites_existing_content_under_the_heading(self) -> None:
+        markdown = "### Core Pages Table\n\nInvented row here.\n\n## 1.2 Subpages\n"
+        result = _replace_heading_block(markdown, "Core Pages Table", "| real | table |")
+        assert "Invented row here." not in result
+        assert "| real | table |" in result
+        assert "## 1.2 Subpages" in result  # Content after the next heading is preserved
+
+    def test_appends_the_heading_when_missing(self) -> None:
+        markdown = "# PART 1: FULL WEBSITE AUDIT\n\nSome narrative only.\n"
+        result = _replace_heading_block(markdown, "Core Pages Table", "| real | table |")
+        assert "Some narrative only." in result
+        assert "### Core Pages Table" in result
+        assert "| real | table |" in result
+
+
+class TestInjectInventoryTables:
+
+    def test_forces_both_tables_regardless_of_model_output(self) -> None:
+        markdown = (
+            "# PART 1: FULL WEBSITE AUDIT\n\n"
+            "### Core Pages Table\n\nInvented core row.\n\n"
+            "### Subpages Table\n\nInvented subpage row.\n"
+        )
+        result = _inject_inventory_tables(markdown, "| real core |", "| real subpages |")
+        assert "Invented core row." not in result
+        assert "Invented subpage row." not in result
+        assert "| real core |" in result
+        assert "| real subpages |" in result
+
+
+# ---------------------------------------------------------------------------
+# _render_technical_and_onpage_section() — Step 9 deterministic PART 2/3 renderer
+# ---------------------------------------------------------------------------
+
+class TestRenderTechnicalAndOnpageSection:
+
+    def test_renders_both_part_headings_verbatim(self) -> None:
+        section = _render_technical_and_onpage_section(_make_context())
+        assert section.startswith("# PART 2: TECHNICAL SEO AUDIT")
+        assert "# PART 3: ON-PAGE & CONTENT AUDIT" in section
+
+    def test_includes_every_subsection_heading(self) -> None:
+        section = _render_technical_and_onpage_section(_make_context())
+        for heading in (
+            "## 2.1 Critical & High Priority Issues",
+            "## 2.2 Robots.txt Analysis",
+            "## 2.3 XML Sitemap Analysis",
+            "## 2.4 Core Web Vitals & Page Speed",
+            "## 2.5 Indexability & Crawlability",
+            "## 2.6 Structured Data Status",
+            "## 3.1 Homepage On-Page Review",
+            "## 3.2 Priority Pages On-Page Review",
+            "## 3.3 Content Quality Assessment",
+        ):
+            assert heading in section
+
+    def test_reflects_deterministic_findings_from_context(self) -> None:
+        context = _make_context(
+            score_breakdown=ScoreBreakdown(overall_score=50.0, category_scores=[], findings=[
+                _make_finding("Technical SEO", title="No HTTPS", severity=Severity.CRITICAL),
+            ]),
+        )
+        section = _render_technical_and_onpage_section(context)
+        assert "No HTTPS" in section
+
 
 # ---------------------------------------------------------------------------
 # generate_report_sections() — Phase 4 sequential section-generation loop
@@ -1123,10 +1231,7 @@ class TestGenerateReportSections:
                 "# SECTION 2: COMPETITOR ANALYSIS\n\nBody.\n\n"
                 "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n## 3.2\nBody.\n## 3.3\nNot applicable.\n\n"
                 "# SECTION 4: STRUCTURED DATA RECOMMENDATIONS\n\nBody.\n\n"
-                "# SECTION 5: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n\n"
-                "# SECTION 6: PRIORITIZED EXECUTION PLAN & KPIS\n\nBody.\n\n"
-                "# SECTION 7: EXECUTIVE SUMMARY\n\nBody.\n\n"
-                "# SECTION 8: METHODOLOGY, LIMITATIONS & SOURCES\n\nBody.\n"
+                "# SECTION 5: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n"
             ),
             ai_guidelines="Never invent findings. Use verified evidence only.",
         )
@@ -1142,38 +1247,40 @@ class TestGenerateReportSections:
                 return "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n## 3.2\nBody.\n## 3.3\nNot applicable.\n"
             return "\n\n".join(f"{h}\n\nGenerated content." for h in headings)
 
-        with patch("src.services.report_service._call_llm", side_effect=fake_call_llm):
+        with patch("src.services.report_service.generate_text", side_effect=fake_call_llm):
             sections = await generate_report_sections(context, full_prompt_context, settings)
 
         assert list(sections.keys()) == [name for name, _ in _SECTION_GROUPS]
         assert "Generated content." in sections["site_inventory"]
-        assert list(sections.keys())[-1] == "executive_summary"
+        assert list(sections.keys())[-1] == "structured_data_and_off_page"
 
     async def test_retries_once_when_required_heading_missing(
         self, settings: Settings, full_prompt_context: PromptContext,
     ) -> None:
         context = _make_context()
-        technical_call_count = {"n": 0}
+        inventory_call_count = {"n": 0}
 
         async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
             headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
-            if any(h.startswith("# PART 3:") for h in headings):
-                technical_call_count["n"] += 1
-                if technical_call_count["n"] == 1:
-                    return "# PART 2: TECHNICAL SEO AUDIT\n\nMissing the PART 3 heading on purpose."
-                return "# PART 2: TECHNICAL SEO AUDIT\n\nFixed on retry.\n\n# PART 3: ON-PAGE & CONTENT AUDIT\n\nFixed too."
+            if any(h.startswith("# PART 1:") for h in headings):
+                inventory_call_count["n"] += 1
+                if inventory_call_count["n"] == 1:
+                    return "Missing the PART 1 heading on purpose."
+                return "# PART 1: FULL WEBSITE AUDIT — ALL PAGES & URLs\n\nFixed on retry."
             if any(h.startswith("# SECTION 3:") for h in headings):
                 return "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n## 3.2\nBody.\n## 3.3\nNot applicable.\n"
             return "\n\n".join(f"{h}\n\nOK." for h in headings)
 
-        with patch("src.services.report_service._call_llm", side_effect=fake_call_llm) as mock_call:
+        # technical_and_onpage never calls the LLM (deterministic-only group), so it is
+        # excluded from the +1 retry-call-count math below.
+        with patch("src.services.report_service.generate_text", side_effect=fake_call_llm) as mock_call:
             sections = await generate_report_sections(context, full_prompt_context, settings)
 
-        assert technical_call_count["n"] == 2  # First call missed a heading, second call (retry) fixed it
-        assert "Fixed on retry" in sections["technical_and_onpage"]
-        assert mock_call.await_count == len(_SECTION_GROUPS) + 1  # One extra call for the single retry
+        assert inventory_call_count["n"] == 2  # First call missed a heading, second call (retry) fixed it
+        assert "Fixed on retry" in sections["site_inventory"]
+        assert mock_call.await_count == (len(_SECTION_GROUPS) - 1) + 1  # -1 for the deterministic-only group, +1 retry
 
-    async def test_keeps_best_effort_output_when_retry_still_fails(
+    async def test_substitutes_deterministic_fallback_when_retry_still_fails(
         self, settings: Settings, full_prompt_context: PromptContext,
     ) -> None:
         context = _make_context()
@@ -1181,12 +1288,237 @@ class TestGenerateReportSections:
         async def always_broken(system_prompt: str, user_message: str, settings: Settings) -> str:
             return "No headings here at all."
 
-        with patch("src.services.report_service._call_llm", side_effect=always_broken):
+        with patch("src.services.report_service.generate_text", side_effect=always_broken):
             sections = await generate_report_sections(context, full_prompt_context, settings)
 
-        # Every group is still present in the result, even though validation never passed.
+        # Every group is still present in the result.
         assert set(sections.keys()) == {name for name, _ in _SECTION_GROUPS}
-        assert all(text == "No headings here at all." for text in sections.values())
+        # technical_and_onpage never calls the (broken) LLM at all — it is rendered
+        # deterministically regardless of how badly the model behaves everywhere else.
+        assert "# PART 2: TECHNICAL SEO AUDIT" in sections["technical_and_onpage"]
+        assert "# PART 3: ON-PAGE & CONTENT AUDIT" in sections["technical_and_onpage"]
+
+        # Every LLM-generating group that still failed validation after the retry gets the
+        # safe deterministic fallback narrative substituted, never the malformed LLM text.
+        llm_groups = {name for name, _ in _SECTION_GROUPS} - {"technical_and_onpage"}
+        for name in llm_groups:
+            assert sections[name] != "No headings here at all."
+            assert "No headings here at all." not in sections[name]
+            assert "Automated narrative generation for this section did not pass validation" in sections[name]
+
+        assert sections["site_inventory"].startswith("# PART 1:")
+        assert "### Core Pages Table" in sections["site_inventory"]
+        assert "### Subpages Table" in sections["site_inventory"]
+        assert sections["keyword_strategy"].startswith("# SECTION 1:")
+        assert "### Primary Keywords Table" in sections["keyword_strategy"]
+        assert "### Long-Tail Keywords Table" in sections["keyword_strategy"]
+        assert sections["competitor_analysis"].startswith("# SECTION 2:")
+        assert "### Competitor Overview Table" in sections["competitor_analysis"]
+        assert "### Keyword Gap Table" in sections["competitor_analysis"]
+        # location_or_market_expansion's fallback still satisfies the "exactly one of
+        # 3.2/3.3 marked not applicable" rule (this default context is not local).
+        assert "## 3.2 Local Location Opportunities" in sections["location_or_market_expansion"]
+        assert "## 3.3 Audience & Market Expansion" in sections["location_or_market_expansion"]
+        assert "Not applicable" in sections["location_or_market_expansion"]
+        assert sections["structured_data_and_off_page"].startswith("# SECTION 4:")
+        assert "# SECTION 5:" in sections["structured_data_and_off_page"]
+
+    async def test_keyword_and_competitor_tables_always_injected(
+        self, settings: Settings, full_prompt_context: PromptContext,
+    ) -> None:
+        context = _make_context(
+            research=ResearchBundle(
+                primary_keywords=[_make_keyword_opportunity(keyword="artisan bread austin")],
+                competitors=[_make_competitor(competitor_name="Joe's Bakery")],
+                research_statuses={"primary_keywords": ResearchStatus.SUCCESS, "competitors": ResearchStatus.SUCCESS},
+            ),
+        )
+
+        async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+            if any(h.startswith("# SECTION 1:") for h in headings):
+                return (
+                    "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\n### Primary Keywords Table\n\nModel row.\n\n"
+                    "### Long-Tail Keywords Table\n\nModel row.\n"
+                )
+            if any(h.startswith("# SECTION 2:") for h in headings):
+                return (
+                    "# SECTION 2: COMPETITOR ANALYSIS\n\n### Competitor Overview Table\n\nModel row.\n\n"
+                    "### Keyword Gap Table\n\nModel row.\n"
+                )
+            if any(h.startswith("# SECTION 3:") for h in headings):
+                return (
+                    "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+                    "## 3.1 Applicability Assessment\n\nNot a local business.\n\n"
+                    "## 3.2 Local Location Opportunities\n\nNot applicable.\n\n"
+                    "## 3.3 Audience & Market Expansion Opportunities\n\nSome narrative.\n"
+                )
+            return "\n\n".join(f"{h}\n\nGenerated content." for h in headings)
+
+        with patch("src.services.report_service.generate_text", side_effect=fake_call_llm):
+            sections = await generate_report_sections(context, full_prompt_context, settings)
+
+        assert "artisan bread austin" in sections["keyword_strategy"]
+        assert "Model row." not in sections["keyword_strategy"]
+        assert "Joe's Bakery" in sections["competitor_analysis"]
+        assert "Model row." not in sections["competitor_analysis"]
+        # Not a local business with a known region — the Location Opportunity Table is
+        # never fabricated, so 3.2's model-authored "Not applicable" text is left alone.
+        assert "Not applicable" in sections["location_or_market_expansion"]
+
+    async def test_location_table_injected_only_when_local_business_with_known_region(
+        self, settings: Settings, full_prompt_context: PromptContext,
+    ) -> None:
+        context = _make_context(
+            is_local_business=True,
+            city_or_region="Austin, TX",
+            research=ResearchBundle(
+                local_demand=[_make_location_opportunity(city_or_region="Austin, TX")],
+                research_statuses={"local_demand": ResearchStatus.SUCCESS},
+            ),
+        )
+
+        async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+            if any(h.startswith("# SECTION 3:") for h in headings):
+                return (
+                    "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+                    "## 3.1 Applicability Assessment\n\nLocal business serving Austin, TX.\n\n"
+                    "## 3.2 Local Location Opportunities\n\n### Location Opportunity Table\n\nModel row.\n\n"
+                    "## 3.3 Audience & Market Expansion Opportunities\n\nNot applicable.\n"
+                )
+            return "\n\n".join(f"{h}\n\nGenerated content." for h in headings)
+
+        with patch("src.services.report_service.generate_text", side_effect=fake_call_llm):
+            sections = await generate_report_sections(context, full_prompt_context, settings)
+
+        assert "Austin, TX" in sections["location_or_market_expansion"]
+        assert "Model row." not in sections["location_or_market_expansion"].split("Location Opportunity Table")[-1]
+
+    async def test_deterministic_table_notes_sent_for_each_llm_group(
+        self, settings: Settings, full_prompt_context: PromptContext,
+    ) -> None:
+        context = _make_context(is_local_business=True, city_or_region="Austin, TX")
+        sent_user_messages: dict[str, str] = {}
+
+        async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+            for heading in headings:
+                sent_user_messages.setdefault(heading, user_message)
+            return "\n\n".join(
+                f"{h}\n\nGenerated content.\n\n## 3.2\nNot applicable.\n## 3.3\nBody.\n" for h in headings
+            )
+
+        with patch("src.services.report_service.generate_text", side_effect=fake_call_llm):
+            await generate_report_sections(context, full_prompt_context, settings)
+
+        site_inventory_msg = next(msg for heading, msg in sent_user_messages.items() if heading.startswith("# PART 1:"))
+        keyword_msg = next(msg for heading, msg in sent_user_messages.items() if heading.startswith("# SECTION 1:"))
+        competitor_msg = next(msg for heading, msg in sent_user_messages.items() if heading.startswith("# SECTION 2:"))
+        location_msg = next(msg for heading, msg in sent_user_messages.items() if heading.startswith("# SECTION 3:"))
+
+        assert "Core Pages Table (1.1) and Subpages Table (1.2)" in site_inventory_msg
+        assert "Primary Keywords Table (1.1) and Long-Tail Keywords Table (1.2)" in keyword_msg
+        assert "Competitor Overview Table (2.1) and Keyword Gap Table (2.2)" in competitor_msg
+        assert "Location Opportunity Table (3.2)" in location_msg
+
+    async def test_own_draft_citation_gap_in_a_deterministic_table_does_not_trigger_a_retry(
+        self, settings: Settings, full_prompt_context: PromptContext,
+    ) -> None:
+        context = _make_context(
+            research=ResearchBundle(
+                primary_keywords=[_make_keyword_opportunity(keyword="artisan bread austin")],
+                research_statuses={"primary_keywords": ResearchStatus.SUCCESS},
+            ),
+        )
+        call_count = {"n": 0}
+
+        async def fake_call_llm(system_prompt: str, user_message: str, settings: Settings) -> str:
+            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+            if any(h.startswith("# SECTION 1:") for h in headings):
+                call_count["n"] += 1
+                return (
+                    "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\n"
+                    "### Primary Keywords Table\n\n"
+                    "| Keyword | Source | Retrieved |\n|---|---|---|\n| bread |  |  |\n\n"
+                    "### Long-Tail Keywords Table\n\n"
+                    "| Keyword | Source | Retrieved |\n|---|---|---|\n| bread near me |  |  |\n"
+                )
+            return "\n\n".join(f"{h}\n\nGenerated content." for h in headings)
+
+        with patch("src.services.report_service.generate_text", side_effect=fake_call_llm):
+            sections = await generate_report_sections(context, full_prompt_context, settings)
+
+        # Only the initial call — the model's own uncited draft table is never checked,
+        # since it is discarded and overwritten by the verified table regardless.
+        assert call_count["n"] == 1
+        assert "artisan bread austin" in sections["keyword_strategy"]
+
+
+# ---------------------------------------------------------------------------
+# _build_fallback_section_markdown() — Step 16 deterministic fallback narrative
+# ---------------------------------------------------------------------------
+
+class TestBuildFallbackSectionMarkdown:
+
+    def test_site_inventory_fallback_has_required_heading_and_no_banned_phrases(self) -> None:
+        context = _make_context(score_breakdown=ScoreBreakdown(
+            overall_score=70.0, findings=[_make_finding("Technical SEO")],
+        ))
+        markdown = _build_fallback_section_markdown("site_inventory", ("PART 1",), context)
+
+        assert markdown.startswith("# PART 1:")
+        assert not _find_banned_phrases(markdown)
+        assert not _missing_required_report_parts(markdown, ("# PART 1:",))
+        assert "Example finding" in markdown  # derived from context.score_breakdown.findings
+
+    def test_keyword_strategy_fallback_includes_primary_and_long_tail_opportunities(self) -> None:
+        context = _make_context(research=ResearchBundle(
+            primary_keywords=[_make_keyword_opportunity(keyword="artisan bread austin")],
+        ))
+        markdown = _build_fallback_section_markdown("keyword_strategy", ("SECTION 1",), context)
+
+        assert markdown.startswith("# SECTION 1:")
+        assert "artisan bread austin" in markdown
+
+    def test_competitor_analysis_fallback_includes_competitors(self) -> None:
+        context = _make_context(research=ResearchBundle(
+            competitors=[_make_competitor(competitor_name="Joe's Bakery")],
+        ))
+        markdown = _build_fallback_section_markdown("competitor_analysis", ("SECTION 2",), context)
+
+        assert markdown.startswith("# SECTION 2:")
+        assert "Joe's Bakery" in markdown
+
+    def test_location_fallback_marks_exactly_one_of_3_2_3_3_not_applicable_when_non_local(self) -> None:
+        context = _make_context(is_local_business=False, city_or_region=None)
+        markdown = _build_fallback_section_markdown("location_or_market_expansion", ("SECTION 3",), context)
+
+        assert not _validate_location_section(markdown)
+
+    def test_location_fallback_marks_exactly_one_of_3_2_3_3_not_applicable_when_local_with_region(self) -> None:
+        context = _make_context(is_local_business=True, city_or_region="Austin, TX")
+        markdown = _build_fallback_section_markdown("location_or_market_expansion", ("SECTION 3",), context)
+
+        assert not _validate_location_section(markdown)
+        assert "Austin, TX" in markdown
+
+    def test_location_fallback_marks_exactly_one_of_3_2_3_3_not_applicable_when_local_without_region(self) -> None:
+        # Step 13's insufficient_location_evidence case.
+        context = _make_context(is_local_business=True, city_or_region=None)
+        markdown = _build_fallback_section_markdown("location_or_market_expansion", ("SECTION 3",), context)
+
+        assert not _validate_location_section(markdown)
+
+    def test_structured_data_and_off_page_fallback_has_both_required_headings(self) -> None:
+        context = _make_context()
+        markdown = _build_fallback_section_markdown(
+            "structured_data_and_off_page", ("SECTION 4", "SECTION 5"), context,
+        )
+
+        assert markdown.startswith("# SECTION 4:")
+        assert "# SECTION 5:" in markdown
+        assert not _missing_required_report_parts(markdown, ("# SECTION 4:", "# SECTION 5:"))
 
 
 # ---------------------------------------------------------------------------
@@ -1195,21 +1527,17 @@ class TestGenerateReportSections:
 
 class TestAssembleReportMarkdown:
 
-    def test_orders_groups_by_declaration_order_and_splices_executive_summary_before_methodology(self) -> None:
-        # Insertion order mirrors _SECTION_GROUPS' generation order (executive_summary last), but
-        # the assembled output must read in declaration order with SECTION 7 spliced in immediately
-        # before SECTION 8 (Methodology), which is generated earlier as part of the same batch.
+    def test_orders_groups_by_declaration_order(self) -> None:
         sections = {
             "site_inventory": "# PART 1: FULL WEBSITE AUDIT\n\nInventory body.",
             "technical_and_onpage": "# PART 2: TECHNICAL SEO AUDIT\n\nTechnical body.",
             "keyword_strategy": "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\nKeyword body.",
             "competitor_analysis": "# SECTION 2: COMPETITOR ANALYSIS\n\nCompetitor body.",
             "location_or_market_expansion": "# SECTION 3: LOCATION STRATEGY\n\nLocation body.",
-            "structured_data_and_execution": (
+            "structured_data_and_off_page": (
                 "# SECTION 4: STRUCTURED DATA\n\nStructured data body.\n\n"
-                "# SECTION 8: METHODOLOGY\n\nMethodology body."
+                "# SECTION 5: OFF-PAGE SEO\n\nOff-page body."
             ),
-            "executive_summary": "# SECTION 7: EXECUTIVE SUMMARY\n\nSummary body.",
         }
         markdown = assemble_report_markdown(sections)
 
@@ -1218,17 +1546,16 @@ class TestAssembleReportMarkdown:
         assert markdown.index("SECTION 1") < markdown.index("SECTION 2")
         assert markdown.index("SECTION 2") < markdown.index("SECTION 3")
         assert markdown.index("SECTION 3") < markdown.index("SECTION 4")
-        assert markdown.index("SECTION 4") < markdown.index("SECTION 7")
-        assert markdown.index("SECTION 7") < markdown.index("SECTION 8")
+        assert markdown.index("SECTION 4") < markdown.index("SECTION 5")
 
     def test_joins_all_section_bodies(self) -> None:
         sections = {
-            "executive_summary": "Summary text.",
             "site_inventory": "Inventory text.",
+            "structured_data_and_off_page": "Off-page text.",
         }
         markdown = assemble_report_markdown(sections)
-        assert "Summary text." in markdown
         assert "Inventory text." in markdown
+        assert "Off-page text." in markdown
 
     def test_handles_partial_sections_dict(self) -> None:
         # A subset of groups (e.g. an in-progress/partially-checkpointed run) still assembles cleanly.
@@ -1286,49 +1613,63 @@ class TestDeduplicateTableRows:
         result = _deduplicate_table_rows(markdown)
         assert result.startswith("| Action | Priority |\n|---|---|\n")
 
+    def test_element_column_prevents_wrongly_collapsing_shared_recommendation(self) -> None:
+        """Homepage Elements Table: 'Element' differs, so identical 'No change needed.' rows must both survive."""
+        markdown = (
+            "| Element | Current | Issue | Recommended |\n"
+            "|---------|---------|-------|-------------|\n"
+            "| Title Tag | Example Bakery | None | No change needed. |\n"
+            "| Canonical Tag | https://example.com/ | None | No change needed. |\n"
+        )
+        result = _deduplicate_table_rows(markdown)
+        assert result.count("No change needed.") == 2
+        assert "Title Tag" in result
+        assert "Canonical Tag" in result
 
-# ---------------------------------------------------------------------------
-# build_source_register() — Phase 4/16 deterministic PART 11.3 table
-# ---------------------------------------------------------------------------
+    def test_page_column_prevents_wrongly_collapsing_shared_recommendation(self) -> None:
+        """Priority Pages Table: 'Page' differs, so two different pages sharing a recommendation must both survive."""
+        markdown = (
+            "| Page | Title Tag Issue | Meta Description Issue | Heading Issue | Recommendation |\n"
+            "|------|------------------|-------------------------|----------------|-----------------|\n"
+            "| https://example.com/a | None | None | None | No immediate action needed. |\n"
+            "| https://example.com/b | None | None | None | No immediate action needed. |\n"
+        )
+        result = _deduplicate_table_rows(markdown)
+        assert result.count("No immediate action needed.") == 2
 
-class TestBuildSourceRegister:
 
-    def test_returns_placeholder_when_no_claims(self) -> None:
-        context = _make_context(research=ResearchBundle())
-        register = build_source_register(context)
-        assert "No externally researched claims" in register
+def _render_deterministic_blocks_body(context: AuditContext) -> str:
+    """
+    Assemble every deterministic block Step 15's validators require, from the
+    real renderers (never hand-typed), so a "well-formed" test report stays
+    well-formed even as new section-aware validators are added.
 
-    def test_includes_every_unique_claim_across_categories(self) -> None:
-        context = _make_context(research=ResearchBundle(
-            keyword_opportunities=[_make_claim("Keyword demand")],
-            competitors=[_make_claim("Competitor found")],
-            local_demand=[_make_claim("Local demand signal")],
-        ))
-        register = build_source_register(context)
-        assert "Keyword demand" in register
-        assert "Competitor found" in register
-        assert "Local demand signal" in register
+    Deliberately avoids _render_technical_and_onpage_section()'s own "## 3.2"/
+    "## 3.3" subsection headings, which would collide with
+    _validate_location_section()'s "## 3.2"/"## 3.3" prefix match on SECTION 3.
+    """
+    inventory = build_inventory_section_data(context)
+    technical = build_technical_section_data(context)
+    on_page = build_on_page_section_data(context)
+    research = context.research
 
-    def test_deduplicates_identical_claim_source_pairs(self) -> None:
-        duplicate = _make_claim("Repeated claim")
-        context = _make_context(research=ResearchBundle(
-            keyword_opportunities=[duplicate],
-            competitors=[duplicate],
-        ))
-        register = build_source_register(context)
-        assert register.count("Repeated claim") == 1
-
-    def test_matches_master_structure_column_format(self) -> None:
-        context = _make_context(research=ResearchBundle(keyword_opportunities=[_make_claim()]))
-        register = build_source_register(context)
-        assert register.startswith("| # | Claim | Source URL | Retrieved |")
-
-    def test_row_contains_source_url_and_retrieved_date(self) -> None:
-        claim = _make_claim("Claim text")
-        context = _make_context(research=ResearchBundle(keyword_opportunities=[claim]))
-        register = build_source_register(context)
-        assert claim.source_url in register
-        assert claim.retrieved_date in register
+    return "\n\n".join([
+        "### Core Pages Table\n\n" + render_core_pages_table(inventory),
+        "### Subpages Table\n\n" + render_subpages_table(inventory),
+        render_critical_high_issues_table(technical.findings),
+        render_robots_txt_section(technical.robots_txt),
+        render_sitemap_section(technical.sitemaps),
+        render_pagespeed_section(technical.performance),
+        render_indexability_section(technical.pages, technical.robots_txt),
+        render_schema_section(technical.detected_schema_types),
+        render_homepage_elements_table(on_page.homepage),
+        render_priority_pages_table(on_page.priority_pages),
+        render_content_quality_section(on_page.content_findings),
+        render_primary_keywords_table(research.primary_keywords, research.research_statuses.get("primary_keywords")),
+        render_long_tail_keywords_table(research.long_tail_keywords, research.research_statuses.get("long_tail_keywords")),
+        render_competitor_overview_table(research.competitors, research.research_statuses.get("competitors")),
+        render_competitor_gap_table(research.competitor_analysis, research.research_statuses.get("competitor_analysis")),
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -1340,11 +1681,13 @@ class TestValidateAssembledReport:
     _TEMPLATE = "# PART 1: EXECUTIVE SUMMARY\n\n# PART 2: FULL WEBSITE AUDIT\n"
 
     def test_well_formed_report_has_no_issues(self) -> None:
+        context = _make_context()
         report = (
             "# PART 1: EXECUTIVE SUMMARY\n\nOverall score: 82.5/100.\n\n"
-            "# PART 2: FULL WEBSITE AUDIT\n\nTechnical SEO: 90.0. On-Page SEO: 80.0.\n"
+            "# PART 2: FULL WEBSITE AUDIT\n\nTechnical SEO: 90.0. On-Page SEO: 80.0.\n\n"
+            + _render_deterministic_blocks_body(context)
         )
-        assert validate_assembled_report(report, self._TEMPLATE, _make_context()) == []
+        assert validate_assembled_report(report, self._TEMPLATE, context) == []
 
     def test_flags_missing_required_heading(self) -> None:
         report = "# PART 1: EXECUTIVE SUMMARY\n\nBody only, PART 2 missing.\n"
@@ -1388,7 +1731,7 @@ class TestValidateAssembledReport:
         assert any("3.2" in issue and "3.3" in issue for issue in issues)
 
     def test_allows_urls_from_crawl_evidence_and_research(self) -> None:
-        context = _make_context(research=ResearchBundle(keyword_opportunities=[_make_claim()]))
+        context = _make_context(research=ResearchBundle(primary_keywords=[_make_keyword_opportunity()]))
         report = (
             "# PART 1: EXECUTIVE SUMMARY\n\nBody.\n\n"
             "# PART 2: FULL WEBSITE AUDIT\n\n"
@@ -1425,35 +1768,17 @@ class TestValidateAssembledReport:
         issues = validate_assembled_report(report, self._TEMPLATE, context)
         assert not any("https://example.com/blog/post-1" in issue for issue in issues)
 
-    def test_flags_missing_overall_score(self) -> None:
-        context = _make_context(score_breakdown=ScoreBreakdown(overall_score=82.5, category_scores=[]))
+    def test_does_not_require_scores_to_appear_in_report_text(self) -> None:
+        """Score-text-presence is not enforced: Sections 6-8 (which held the score summary) were removed."""
+        context = _make_context(score_breakdown=ScoreBreakdown(overall_score=82.5, category_scores=[
+            CategoryScore(category="Technical SEO", weight_percent=40.0, score=90.0),
+        ]))
         report = (
             "# PART 1: EXECUTIVE SUMMARY\n\nThe site is doing fine.\n\n"
-            "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
+            "# PART 2: FULL WEBSITE AUDIT\n\nNo score figures mentioned here at all.\n"
         )
         issues = validate_assembled_report(report, self._TEMPLATE, context)
-        assert any("overall score 82.5" in issue for issue in issues)
-
-    def test_flags_missing_category_score(self) -> None:
-        context = _make_context(score_breakdown=ScoreBreakdown(
-            overall_score=82.5,
-            category_scores=[CategoryScore(category="Technical SEO", weight_percent=40.0, score=90.0)],
-        ))
-        report = (
-            "# PART 1: EXECUTIVE SUMMARY\n\nOverall score: 82.5/100.\n\n"
-            "# PART 2: FULL WEBSITE AUDIT\n\nNo category figures mentioned here.\n"
-        )
-        issues = validate_assembled_report(report, self._TEMPLATE, context)
-        assert any("Technical SEO score 90.0" in issue for issue in issues)
-
-    def test_accepts_rounded_score_text(self) -> None:
-        context = _make_context(score_breakdown=ScoreBreakdown(overall_score=82.5, category_scores=[]))
-        report = (
-            "# PART 1: EXECUTIVE SUMMARY\n\nOverall score: 82 out of 100.\n\n"
-            "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
-        )
-        issues = validate_assembled_report(report, self._TEMPLATE, context)
-        assert not any("overall score" in issue.lower() for issue in issues)
+        assert not any("score" in issue.lower() for issue in issues)
 
     def test_flags_invented_core_web_vitals_value(self) -> None:
         report = (
@@ -1510,22 +1835,6 @@ class TestValidateAssembledReport:
         issues = validate_assembled_report(report, self._TEMPLATE, _make_context())
         assert any("backlink count" in issue for issue in issues)
 
-    def test_flags_executive_summary_over_400_words(self) -> None:
-        report = (
-            "# SECTION 7: EXECUTIVE SUMMARY\n\n" + ("word " * 401) + "\n\n"
-            "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
-        )
-        issues = validate_assembled_report(report, self._TEMPLATE, _make_context())
-        assert any("400-word maximum" in issue for issue in issues)
-
-    def test_allows_executive_summary_at_400_words(self) -> None:
-        report = (
-            "# SECTION 7: EXECUTIVE SUMMARY\n\n" + ("word " * 400) + "\n\n"
-            "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
-        )
-        issues = validate_assembled_report(report, self._TEMPLATE, _make_context())
-        assert not any("word maximum" in issue for issue in issues)
-
     def test_flags_table_row_with_wrong_column_count(self) -> None:
         report = (
             "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n\n"
@@ -1556,8 +1865,10 @@ class TestAssembleAndValidateReport:
     def test_well_formed_sections_produce_valid_result(self) -> None:
         context = _make_context(score_breakdown=ScoreBreakdown(overall_score=82.5, category_scores=[]))
         sections = {
-            "executive_summary": "# PART 1: EXECUTIVE SUMMARY\n\nOverall score: 82.5/100.\n",
-            "site_inventory": "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n",
+            "site_inventory": (
+                "# PART 1: EXECUTIVE SUMMARY\n\nOverall score: 82.5/100.\n\n"
+                "# PART 2: FULL WEBSITE AUDIT\n\nBody.\n\n" + _render_deterministic_blocks_body(context)
+            ),
         }
         result = assemble_and_validate_report(sections, self._TEMPLATE, context)
 
@@ -1568,57 +1879,747 @@ class TestAssembleAndValidateReport:
         assert "PART 2" in result.markdown_report
 
     def test_malformed_sections_produce_invalid_result_with_issues(self) -> None:
+        context = _make_context()
         sections = {
-            "executive_summary": "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n",
-            # PART 2 heading missing entirely — should be flagged.
+            "site_inventory": (
+                "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n\n"
+                # PART 2 heading missing entirely — should be flagged.
+                + _render_deterministic_blocks_body(context)
+            ),
         }
-        result = assemble_and_validate_report(sections, self._TEMPLATE, _make_context())
+        result = assemble_and_validate_report(sections, self._TEMPLATE, context)
 
         assert result.is_valid is False
         assert any("Missing required PART headings" in issue for issue in result.issues)
         # The Markdown is still returned even though it failed validation.
         assert "PART 1" in result.markdown_report
 
-    def test_replaces_llm_written_source_register_with_deterministic_one(self) -> None:
-        context = _make_context(research=ResearchBundle(keyword_opportunities=[_make_claim("Real claim")]))
-        sections = {
-            "executive_summary": "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n",
-            "structured_data_and_execution": (
-                "# PART 11: METHODOLOGY, LIMITATIONS & SOURCES\n\n"
-                "## 11.3 Source Register\n\n"
-                "### Source Register Table\n\n"
-                "| # | Claim | Source URL | Retrieved |\n|---|---|---|---|\n"
-                "| 1 | Made up claim | https://not-real.example | 2020-01-01 |\n"
-            ),
-        }
-        result = assemble_and_validate_report(sections, self._TEMPLATE, context)
-
-        assert "Real claim" in result.markdown_report
-        assert "Made up claim" not in result.markdown_report
-        assert "not-real.example" not in result.markdown_report
-
-    def test_appends_source_register_when_llm_omitted_the_heading(self) -> None:
-        context = _make_context(research=ResearchBundle(competitors=[_make_claim("Competitor insight")]))
-        sections = {
-            "executive_summary": "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n",
-            "structured_data_and_execution": "# PART 11: METHODOLOGY, LIMITATIONS & SOURCES\n\nNo table here.\n",
-        }
-        result = assemble_and_validate_report(sections, self._TEMPLATE, context)
-
-        assert "### Source Register Table" in result.markdown_report
-        assert "Competitor insight" in result.markdown_report
-
     def test_deduplicates_repeated_action_rows_across_the_assembled_report(self) -> None:
+        context = _make_context()
         sections = {
-            "executive_summary": "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n",
-            "structured_data_and_execution": (
-                "# PART 10: PRIORITIZED EXECUTION PLAN & KPIs\n\n"
+            "site_inventory": (
+                "# PART 1: FULL WEBSITE AUDIT\n\n"
                 "| Timeframe | Action | Owner | Priority |\n|---|---|---|---|\n"
                 "| 30 days | Add meta descriptions | SEO Team | High |\n"
-                "| 60 days | Add meta descriptions | SEO Team | High |\n"
+                "| 60 days | Add meta descriptions | SEO Team | High |\n\n"
+                + _render_deterministic_blocks_body(context)
             ),
         }
-        result = assemble_and_validate_report(sections, self._TEMPLATE, _make_context())
+        result = assemble_and_validate_report(sections, self._TEMPLATE, context)
 
         assert result.markdown_report.count("Add meta descriptions") == 1
+
+    def test_raises_report_integrity_error_when_a_deterministic_block_is_missing(self) -> None:
+        context = _make_context()
+        sections = {
+            "site_inventory": (
+                "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n\n# PART 2: FULL WEBSITE AUDIT\n\nBody.\n"
+                # Every deterministic block (Core Pages Table, etc.) is missing —
+                # this can only happen from a pipeline bug, never LLM content.
+            ),
+        }
+
+        with pytest.raises(ReportIntegrityError):
+            assemble_and_validate_report(sections, self._TEMPLATE, context)
+
+    def test_raises_report_integrity_error_when_a_crawled_page_is_missing_from_inventory(self) -> None:
+        context = _make_context()
+        # Every deterministic block present except the inventory tables are missing a
+        # crawled page — this can only happen from a pipeline/injection bug.
+        broken_body = _render_deterministic_blocks_body(context).replace(
+            "### Core Pages Table\n\n" + render_core_pages_table(build_inventory_section_data(context)),
+            "### Core Pages Table\n\n| Page | URL | Title Tag | Meta Description | H1 | Word Count | SEO Notes |\n"
+            "|---|---|---|---|---|---|---|\n",
+        )
+        sections = {
+            "site_inventory": (
+                "# PART 1: EXECUTIVE SUMMARY\n\nSummary.\n\n# PART 2: FULL WEBSITE AUDIT\n\nBody.\n\n" + broken_body
+            ),
+        }
+
+        with pytest.raises(ReportIntegrityError):
+            assemble_and_validate_report(sections, self._TEMPLATE, context)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic PART 1 inventory table rendering (Step 6)
+# ---------------------------------------------------------------------------
+
+def _make_report_row(
+    url: str = "https://example.com/services/hair-transplant",
+    page_title: str | None = "Hair Transplant Services | Example Clinic",
+) -> PageReportRow:
+    return PageReportRow(
+        url=url,
+        page_type=PageType.SERVICE_PRODUCT,
+        was_crawled=True,
+        http_status=200,
+        page_title=page_title,
+        meta_description="A meta description of reasonable length for testing purposes here.",
+        canonical_url=url,
+        h1_tags=["Hair Transplant Services"],
+        word_count=400,
+        schema_types=["Service"],
+        internal_links=["https://example.com/about"],
+    )
+
+
+class TestDerivePageName:
+
+    def test_homepage_path_returns_homepage(self) -> None:
+        assert _derive_page_name("https://example.com/") == "Homepage"
+        assert _derive_page_name("https://example.com") == "Homepage"
+
+    def test_hyphenated_slug_is_title_cased(self) -> None:
+        assert _derive_page_name("https://example.com/services/hair-transplant") == "Hair Transplant"
+
+    def test_underscored_slug_is_title_cased(self) -> None:
+        assert _derive_page_name("https://example.com/blog/best_seo_tips") == "Best Seo Tips"
+
+
+class TestEscapeTableCell:
+
+    def test_pipe_characters_are_escaped(self) -> None:
+        assert _escape_table_cell("Title | With Pipe") == "Title \\| With Pipe"
+
+    def test_plain_text_is_unchanged(self) -> None:
+        assert _escape_table_cell("Plain Title") == "Plain Title"
+
+
+class TestRenderPageInventoryTable:
+
+    def test_table_has_required_header_and_separator(self) -> None:
+        table = _render_page_inventory_table([_make_report_row()])
+        lines = table.splitlines()
+        assert lines[0] == "| #Index | Page Name (derived from URL) | URL | Title Tag | SEO Notes |"
+        assert lines[1].startswith("|--------|")
+
+    def test_row_uses_verified_title_and_derived_name(self) -> None:
+        table = _render_page_inventory_table([_make_report_row()])
+        assert "Hair Transplant" in table
+        assert "Hair Transplant Services \\| Example Clinic" in table
+
+    def test_missing_title_renders_as_missing_not_invented(self) -> None:
+        row = _make_report_row(page_title=None)
+        table = _render_page_inventory_table([row])
+        assert "| Missing |" in table
+
+    def test_seo_notes_cell_has_exactly_three_bullets(self) -> None:
+        table = _render_page_inventory_table([_make_report_row()])
+        assert table.count("<li>") == 3
+        assert table.count("</li>") == 3
+        assert "<ul>" in table and "</ul>" in table
+
+    def test_empty_rows_produce_header_only(self) -> None:
+        table = _render_page_inventory_table([])
+        assert len(table.splitlines()) == 2
+
+
+class TestRenderCorePagesAndSubpagesTables:
+
+    def test_render_core_pages_table_uses_only_core_pages(self) -> None:
+        inventory = InventorySectionData(
+            core_pages=[_make_report_row(url="https://example.com/")],
+            subpages=[_make_report_row(url="https://example.com/blog/post-1")],
+            sitemap_only_pages=[],
+            total_discovered=10,
+            total_analyzed=2,
+        )
+        table = render_core_pages_table(inventory)
+        assert "https://example.com/" in table
+        assert "post-1" not in table
+
+    def test_render_subpages_table_uses_only_subpages(self) -> None:
+        inventory = InventorySectionData(
+            core_pages=[_make_report_row(url="https://example.com/")],
+            subpages=[_make_report_row(url="https://example.com/blog/post-1")],
+            sitemap_only_pages=[],
+            total_discovered=10,
+            total_analyzed=2,
+        )
+        table = render_subpages_table(inventory)
+        assert "https://example.com/blog/post-1" in table
+        assert table.count("| Homepage |") == 0
+
+
+# ---------------------------------------------------------------------------
+# Deterministic PART 2 factual body rendering (Step 7)
+# ---------------------------------------------------------------------------
+
+class TestRenderCriticalHighIssuesTable:
+
+    def test_includes_only_critical_and_high_severity_findings(self) -> None:
+        findings = [
+            _make_finding("Technical SEO", title="Critical issue", severity=Severity.CRITICAL),
+            _make_finding("Technical SEO", title="High issue", severity=Severity.HIGH),
+            _make_finding("Technical SEO", title="Medium issue", severity=Severity.MEDIUM),
+            _make_finding("Technical SEO", title="Low issue", severity=Severity.LOW),
+        ]
+        table = render_critical_high_issues_table(findings)
+        assert "Critical issue" in table
+        assert "High issue" in table
+        assert "Medium issue" not in table
+        assert "Low issue" not in table
+
+    def test_empty_findings_produce_a_clear_no_issues_row(self) -> None:
+        table = render_critical_high_issues_table([])
+        assert "No Critical or High severity issues were found." in table
+
+    def test_pipe_characters_in_finding_text_are_escaped(self) -> None:
+        finding = _make_finding("Technical SEO", severity=Severity.HIGH, title="Title | with pipe")
+        table = render_critical_high_issues_table([finding])
+        assert "Title \\| with pipe" in table
+
+
+class TestRenderRobotsTxtSection:
+
+    def test_none_evidence_is_reported_honestly(self) -> None:
+        assert "not collected" in render_robots_txt_section(None)
+
+    def test_accessible_robots_with_no_blocking_reports_facts(self) -> None:
+        robots = RobotsTxtEvidence(
+            is_accessible=True, http_status=200,
+            disallow_rules=["/admin"], allow_rules=["/admin/public"],
+            sitemap_urls=["https://example.com/sitemap.xml"], blocks_root_path=False,
+        )
+        section = render_robots_txt_section(robots)
+        assert "Accessible: Yes (HTTP 200)" in section
+        assert "/admin" in section
+        assert "/admin/public" in section
+        assert "https://example.com/sitemap.xml" in section
+        assert "Blocks the entire site" not in section
+
+    def test_blocking_root_path_is_flagged(self) -> None:
+        robots = RobotsTxtEvidence(
+            is_accessible=True, http_status=200,
+            disallow_rules=["/"], allow_rules=[], sitemap_urls=[], blocks_root_path=True,
+        )
+        section = render_robots_txt_section(robots)
+        assert "Blocks the entire site from crawling" in section
+        assert "No Sitemap directive" in section
+
+
+class TestRenderSitemapSection:
+
+    def test_empty_list_is_reported_honestly(self) -> None:
+        assert "No XML sitemap" in render_sitemap_section([])
+
+    def test_accessible_sitemap_reports_url_count(self) -> None:
+        sitemaps = [SitemapEvidence(url="https://example.com/sitemap.xml", is_accessible=True, http_status=200, url_count=42)]
+        section = render_sitemap_section(sitemaps)
+        assert "https://example.com/sitemap.xml" in section
+        assert "42 URL(s)" in section
+        assert "accessible (HTTP 200)" in section
+
+    def test_inaccessible_sitemap_reports_status_not_count(self) -> None:
+        sitemaps = [SitemapEvidence(url="https://example.com/sitemap.xml", is_accessible=False, http_status=404, url_count=0)]
+        section = render_sitemap_section(sitemaps)
+        assert "not accessible (HTTP 404)" in section
+
+
+class TestRenderPagespeedSection:
+
+    def test_unavailable_performance_is_reported_honestly(self) -> None:
+        assert "not available" in render_pagespeed_section(None)
+        assert "not available" in render_pagespeed_section(PerformanceEvidence(is_available=False, data_source=""))
+
+    def test_available_field_data_reports_source_and_metrics(self) -> None:
+        performance = PerformanceEvidence(
+            is_available=True, data_source="field", source_url="https://example.com/",
+            performance_score=88.0, largest_contentful_paint_ms=2500.0,
+            cumulative_layout_shift=0.05, interaction_to_next_paint_ms=180.0,
+        )
+        section = render_pagespeed_section(performance)
+        assert "Chrome UX Report" in section
+        assert "88/100" in section
+        assert "2.5s" in section
+        assert "0.05" in section
+        assert "180ms" in section
+
+    def test_available_with_no_metrics_states_none_available(self) -> None:
+        performance = PerformanceEvidence(is_available=True, data_source="lab", source_url="https://example.com/")
+        section = render_pagespeed_section(performance)
+        assert "No individual Core Web Vitals metrics were available." in section
+
+
+class TestRenderIndexabilitySection:
+
+    def test_no_blocking_and_no_noindex_reports_clean_state(self) -> None:
+        pages = [_make_report_row(url="https://example.com/")]
+        section = render_indexability_section(pages, robots=None)
+        assert "Not blocked at the site level" in section
+        assert "None of the 1 analyzed page(s)" in section
+
+    def test_blocked_root_path_is_flagged(self) -> None:
+        robots = RobotsTxtEvidence(
+            is_accessible=True, http_status=200,
+            disallow_rules=["/"], allow_rules=[], sitemap_urls=[], blocks_root_path=True,
+        )
+        section = render_indexability_section([], robots=robots)
+        assert "Crawlability: Blocked" in section
+
+    def test_noindex_pages_are_listed(self) -> None:
+        pages = [_make_report_row(url="https://example.com/private"), ]
+        pages[0].meta_robots = "noindex"
+        section = render_indexability_section(pages, robots=None)
+        assert "1 of 1 analyzed page(s)" in section
+        assert "https://example.com/private" in section
+
+
+class TestRenderSchemaSection:
+
+    def test_no_schema_is_reported_honestly(self) -> None:
+        assert "No structured data" in render_schema_section([])
+
+    def test_detected_schema_types_are_listed(self) -> None:
+        section = render_schema_section(["LocalBusiness", "FAQPage"])
+        assert "LocalBusiness, FAQPage" in section
+
+
+# ---------------------------------------------------------------------------
+# Deterministic PART 3 on-page table rendering (Step 8)
+# ---------------------------------------------------------------------------
+
+class TestRenderHomepageElementsTable:
+
+    def test_table_has_required_header_and_four_element_rows(self) -> None:
+        table = render_homepage_elements_table(_make_report_row())
+        lines = table.splitlines()
+        assert lines[0] == "| Element | Current | Issue | Recommended |"
+        assert lines[1].startswith("|---------|")
+        assert len(lines) == 6  # header + separator + 4 elements
+
+    def test_missing_title_row_reports_missing_and_a_recommendation(self) -> None:
+        row = _make_report_row(page_title=None)
+        table = render_homepage_elements_table(row)
+        assert "| Title Tag | Missing | Missing | Add a unique, descriptive title tag" in table
+
+    def test_pipe_characters_in_values_are_escaped(self) -> None:
+        row = _make_report_row(page_title="Title | With Pipe")
+        table = render_homepage_elements_table(row)
+        assert "Title \\| With Pipe" in table
+
+
+class TestRenderPriorityPagesTable:
+
+    def test_table_has_required_header(self) -> None:
+        table = render_priority_pages_table([_make_report_row()])
+        lines = table.splitlines()
+        assert lines[0] == "| Page | Title Tag Issue | Meta Description Issue | Heading Issue | Recommendation |"
+
+    def test_empty_list_produces_an_honest_no_pages_row(self) -> None:
+        table = render_priority_pages_table([])
+        assert "No priority pages were analyzed." in table
+
+    def test_healthy_page_needs_no_action(self) -> None:
+        table = render_priority_pages_table([_make_report_row()])
+        assert "No immediate action needed." in table
+        assert "| None | None | None |" in table
+
+    def test_page_with_issues_reports_them(self) -> None:
+        row = _make_report_row(page_title=None)
+        table = render_priority_pages_table([row])
+        assert row.url in table
+        assert "Missing" in table
+
+
+class TestRenderContentQualitySection:
+
+    def test_no_findings_reports_an_honest_clean_state(self) -> None:
+        section = render_content_quality_section([])
+        assert "No content quality issues were found" in section
+
+    def test_findings_report_counts_and_affected_urls(self) -> None:
+        finding = _make_finding(
+            "Content Quality",
+            title="Pages have thin content",
+            description="2 of 5 page(s) have fewer than 300 visible words.",
+            evidence_urls=["https://example.com/thin-1", "https://example.com/thin-2"],
+        )
+        section = render_content_quality_section([finding])
+        assert "Pages have thin content" in section
+        assert "2 of 5 page(s)" in section
+        assert "https://example.com/thin-1" in section
+        assert "https://example.com/thin-2" in section
+
+
+# ---------------------------------------------------------------------------
+# Deterministic Section 1-3 opportunity table rendering (Step 14 — Phase 4)
+# ---------------------------------------------------------------------------
+
+class TestRenderResearchStatusNote:
+
+    def test_no_results_is_a_genuine_empty_result_not_a_failure(self) -> None:
+        note = _render_research_status_note(ResearchStatus.NO_RESULTS)
+        assert "genuine zero-result search" in note
+        assert "not a research failure" in note
+
+    def test_parse_failed_is_an_availability_gap_not_no_opportunity(self) -> None:
+        note = _render_research_status_note(ResearchStatus.PARSE_FAILED)
+        assert "research-availability gap" in note
+        assert "not an absence of market opportunity" in note
+
+    def test_citation_failed_is_an_availability_gap(self) -> None:
+        assert "research-availability gap" in _render_research_status_note(ResearchStatus.CITATION_FAILED)
+
+    def test_provider_failed_is_an_availability_gap(self) -> None:
+        assert "research-availability gap" in _render_research_status_note(ResearchStatus.PROVIDER_FAILED)
+
+    def test_success_and_none_produce_no_note(self) -> None:
+        assert _render_research_status_note(ResearchStatus.SUCCESS) == ""
+        assert _render_research_status_note(None) == ""
+
+
+class TestRenderPrimaryAndLongTailKeywordsTable:
+
+    def test_renders_accepted_rows_with_citation(self) -> None:
+        opportunity = _make_keyword_opportunity(keyword="artisan bread austin")
+        table = render_primary_keywords_table([opportunity], ResearchStatus.SUCCESS)
+        assert "artisan bread austin" in table
+        assert "[Source](https://example.com/source)" in table
+        assert "2026-08-04" in table
+
+    def test_missing_estimates_are_honest_not_fabricated(self) -> None:
+        opportunity = KeywordOpportunity(
+            keyword="bread", search_intent="commercial", source_url="https://example.com/source",
+            source_title="Source", retrieved_date="2026-08-04",
+        )
+        table = render_long_tail_keywords_table([opportunity], ResearchStatus.SUCCESS)
+        assert "No sourced estimate" in table
+        assert "No clear existing page match" in table
+
+    def test_empty_no_results_shows_a_genuine_empty_result_note(self) -> None:
+        table = render_primary_keywords_table([], ResearchStatus.NO_RESULTS)
+        assert "genuine zero-result search" in table
+
+    def test_empty_failure_status_shows_an_availability_gap_note(self) -> None:
+        table = render_long_tail_keywords_table([], ResearchStatus.PROVIDER_FAILED)
+        assert "research-availability gap" in table
+
+
+class TestRenderCompetitorOverviewAndGapTable:
+
+    def test_renders_accepted_competitor_with_citation(self) -> None:
+        competitor = _make_competitor(competitor_name="Joe's Bakery", website="https://joesbakery.com")
+        table = render_competitor_overview_table([competitor], ResearchStatus.SUCCESS)
+        assert "Joe's Bakery" in table
+        assert "https://joesbakery.com" in table
+
+    def test_missing_authority_is_honest_not_fabricated(self) -> None:
+        competitor = CompetitorOverview(
+            competitor_name="Joe's Bakery", website="https://joesbakery.com", focus="Wholesale bread",
+            source_url="https://example.com/source", source_title="Source", retrieved_date="2026-08-04",
+        )
+        table = render_competitor_overview_table([competitor], ResearchStatus.SUCCESS)
+        assert "No sourced estimate" in table
+
+    def test_gap_table_renders_accepted_rows(self) -> None:
+        gap = _make_gap(keyword="artisan bread austin", your_gap="No dedicated landing page")
+        table = render_competitor_gap_table([gap], ResearchStatus.SUCCESS)
+        assert "artisan bread austin" in table
+        assert "No dedicated landing page" in table
+
+    def test_empty_no_results_shows_a_genuine_empty_result_note(self) -> None:
+        assert "genuine zero-result search" in render_competitor_overview_table([], ResearchStatus.NO_RESULTS)
+
+    def test_empty_failure_status_shows_an_availability_gap_note(self) -> None:
+        assert "research-availability gap" in render_competitor_gap_table([], ResearchStatus.CITATION_FAILED)
+
+
+class TestRenderLocationOpportunityTable:
+
+    def test_renders_accepted_rows_with_citation(self) -> None:
+        opportunity = _make_location_opportunity(city_or_region="Austin, TX")
+        table = render_location_opportunity_table([opportunity], ResearchStatus.SUCCESS)
+        assert "Austin, TX" in table
+        assert "bakery near me" in table
+
+    def test_empty_no_results_shows_a_genuine_empty_result_note(self) -> None:
+        assert "genuine zero-result search" in render_location_opportunity_table([], ResearchStatus.NO_RESULTS)
+
+    def test_empty_failure_status_shows_an_availability_gap_note(self) -> None:
+        assert "research-availability gap" in render_location_opportunity_table([], ResearchStatus.PARSE_FAILED)
+
+
+class TestInjectKeywordAndCompetitorAndLocationTables:
+
+    def test_inject_keyword_tables_forces_both_regardless_of_model_output(self) -> None:
+        markdown = (
+            "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\n"
+            "### Primary Keywords Table\n\nInvented primary row.\n\n"
+            "### Long-Tail Keywords Table\n\nInvented long-tail row.\n"
+        )
+        result = _inject_keyword_tables(markdown, "| real primary |", "| real long-tail |")
+        assert "Invented primary row." not in result
+        assert "Invented long-tail row." not in result
+        assert "| real primary |" in result
+        assert "| real long-tail |" in result
+
+    def test_inject_competitor_tables_forces_both_regardless_of_model_output(self) -> None:
+        markdown = (
+            "# SECTION 2: COMPETITOR ANALYSIS\n\n"
+            "### Competitor Overview Table\n\nInvented competitor row.\n\n"
+            "### Keyword Gap Table\n\nInvented gap row.\n"
+        )
+        result = _inject_competitor_tables(markdown, "| real overview |", "| real gap |")
+        assert "Invented competitor row." not in result
+        assert "Invented gap row." not in result
+        assert "| real overview |" in result
+        assert "| real gap |" in result
+
+    def test_inject_location_table_forces_content_regardless_of_model_output(self) -> None:
+        markdown = "# SECTION 3: LOCATION\n\n### Location Opportunity Table\n\nInvented location row.\n"
+        result = _inject_location_table(markdown, "| real location |")
+        assert "Invented location row." not in result
+        assert "| real location |" in result
+
+
+# ---------------------------------------------------------------------------
+# Section-aware evidence validators (Step 15)
+# ---------------------------------------------------------------------------
+
+class TestFindTableAfterHeading:
+
+    def test_returns_empty_list_when_heading_absent(self) -> None:
+        assert _find_table_after_heading("# PART 1\n\nNo tables here.\n", "Core Pages Table") == []
+
+    def test_returns_table_rows_found_under_heading(self) -> None:
+        markdown = (
+            "### Core Pages Table\n\n"
+            "| URL | Title Tag |\n|---|---|\n| https://example.com/ | Example |\n"
+        )
+        tables = _find_table_after_heading(markdown, "Core Pages Table")
+        assert len(tables) == 1
+        assert tables[0][0] == "| URL | Title Tag |"
+
+
+class TestValidateInventoryTableCoverage:
+
+    @staticmethod
+    def _report(core_table_body: str) -> str:
+        return (
+            "### Core Pages Table\n\n" + core_table_body +
+            "\n\n### Subpages Table\n\n| URL | Title Tag |\n|---|---|\n"
+        )
+
+    def test_flags_page_missing_from_both_tables(self) -> None:
+        context = _make_context()  # homepage https://example.com/, page_title="Example Bakery"
+        report = self._report("| URL | Title Tag |\n|---|---|\n")  # homepage row omitted
+        issues = _validate_inventory_table_coverage(report, context)
+        assert any("is missing from both the Core Pages Table and Subpages Table" in issue for issue in issues)
+
+    def test_flags_page_appearing_more_than_once(self) -> None:
+        context = _make_context()
+        row = "| https://example.com/ | Example Bakery |\n"
+        report = self._report("| URL | Title Tag |\n|---|---|\n" + row + row)
+        issues = _validate_inventory_table_coverage(report, context)
+        assert any("appears 2 times" in issue for issue in issues)
+
+    def test_flags_title_tag_mismatch(self) -> None:
+        context = _make_context()
+        report = self._report("| URL | Title Tag |\n|---|---|\n| https://example.com/ | Wrong Title |\n")
+        issues = _validate_inventory_table_coverage(report, context)
+        assert any("Title Tag cell for https://example.com/" in issue for issue in issues)
+
+    def test_well_formed_single_occurrence_with_matching_title_has_no_issues(self) -> None:
+        context = _make_context()
+        report = self._report("| URL | Title Tag |\n|---|---|\n| https://example.com/ | Example Bakery |\n")
+        assert _validate_inventory_table_coverage(report, context) == []
+
+
+class TestValidateSeoNotesCellCounts:
+
+    def test_flags_wrong_li_count(self) -> None:
+        report = (
+            "### Core Pages Table\n\n"
+            "| URL | SEO Notes |\n|---|---|\n"
+            "| https://example.com/ | <ul><li>One</li><li>Two</li></ul> |\n"
+        )
+        issues = _validate_seo_notes_cell_counts(report)
+        assert any("has 2 SEO Notes <li> item(s), expected exactly 3" in issue for issue in issues)
+
+    def test_accepts_exactly_three_li_items(self) -> None:
+        report = (
+            "### Core Pages Table\n\n"
+            "| URL | SEO Notes |\n|---|---|\n"
+            "| https://example.com/ | <ul><li>One</li><li>Two</li><li>Three</li></ul> |\n"
+        )
+        assert _validate_seo_notes_cell_counts(report) == []
+
+
+class TestValidateNoUnconfirmedHttpClaims:
+
+    @staticmethod
+    def _context_with_status(http_status: int, attempt_count: int = 1) -> AuditContext:
+        page = _make_page_evidence(http_status=http_status, attempt_count=attempt_count)
+        return _make_context(site_evidence=_make_site_evidence(homepage=page))
+
+    def test_flags_unhedged_definitive_claim(self) -> None:
+        context = self._context_with_status(503)
+        report = "The homepage returned HTTP 503, confirming the server is down.\n"
+        issues = _validate_no_unconfirmed_http_claims(report, context)
+        assert any("HTTP 503" in issue for issue in issues)
+
+    def test_allows_hedged_claim(self) -> None:
+        context = self._context_with_status(503)
+        report = "The homepage returned an unconfirmed HTTP 503 status, observed once.\n"
+        assert _validate_no_unconfirmed_http_claims(report, context) == []
+
+    def test_confirmed_status_is_never_flagged(self) -> None:
+        context = self._context_with_status(503, attempt_count=2)
+        report = "The homepage returned HTTP 503.\n"
+        assert _validate_no_unconfirmed_http_claims(report, context) == []
+
+    def test_non_transient_status_is_never_flagged(self) -> None:
+        context = self._context_with_status(200)
+        report = "The homepage returned HTTP 200.\n"
+        assert _validate_no_unconfirmed_http_claims(report, context) == []
+
+
+class TestValidateDeterministicBlocksPresent:
+
+    def test_flags_missing_block(self) -> None:
+        context = _make_context()
+        issues = _validate_deterministic_blocks_present("# Report with nothing in it.\n", context)
+        assert any("missing the expected deterministic Core Pages Table content" in issue for issue in issues)
+
+    def test_all_blocks_present_has_no_issues(self) -> None:
+        context = _make_context()
+        report = _render_deterministic_blocks_body(context)
+        assert _validate_deterministic_blocks_present(report, context) == []
+
+    def test_location_table_not_required_for_non_local_business(self) -> None:
+        context = _make_context()  # is_local_business=False by default
+        report = _render_deterministic_blocks_body(context)
+        assert _validate_deterministic_blocks_present(report, context) == []
+
+    def test_location_table_required_for_local_business_with_region(self) -> None:
+        context = _make_context()
+        report = _render_deterministic_blocks_body(context)  # built without a Location Opportunity Table
+        local_context = _make_context(is_local_business=True, city_or_region="Austin, TX")
+
+        issues = _validate_deterministic_blocks_present(report, local_context)
+        assert any("missing the expected deterministic Location Opportunity Table content" in issue for issue in issues)
+
+
+class TestValidateRemovedSectionsAbsent:
+
+    def test_flags_removed_section_heading(self) -> None:
+        issues = _validate_removed_sections_absent("# SECTION 6: OLD SECTION\n\nContent.\n")
+        assert any("SECTION 6" in issue for issue in issues)
+
+    def test_no_issue_when_all_removed_sections_absent(self) -> None:
+        assert _validate_removed_sections_absent("# PART 1: EXECUTIVE SUMMARY\n") == []
+
+
+# ---------------------------------------------------------------------------
+# Provider parity (Step 20) — the same frozen AuditContext, run through
+# generate_report_sections()/assemble_and_validate_report() once per
+# provider with only the underlying narrative wording varied, must produce
+# structurally identical reports. Only narrative sentences may differ.
+# ---------------------------------------------------------------------------
+
+_PROVIDER_PARITY_TEMPLATE = PromptContext(
+    audit_prompt="Audit {{website_url}}.",
+    seo_skill="Priority: Crawlability, Technical, On-Page, Content.",
+    master_report_structure=(
+        "# PART 1: FULL WEBSITE AUDIT\n\nBody.\n\n"
+        "# PART 2: TECHNICAL SEO AUDIT\n\nBody.\n\n"
+        "# PART 3: ON-PAGE & CONTENT AUDIT\n\nBody.\n\n"
+        "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\nBody.\n\n"
+        "# SECTION 2: COMPETITOR ANALYSIS\n\nBody.\n\n"
+        "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+        "## 3.1 Applicability Assessment\nBody.\n"
+        "## 3.2 Local Location Opportunities\nBody.\n"
+        "## 3.3 Audience & Market Expansion Opportunities\nNot applicable.\n\n"
+        "# SECTION 4: STRUCTURED DATA RECOMMENDATIONS\n\nBody.\n\n"
+        "# SECTION 5: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n"
+    ),
+    ai_guidelines="Never invent findings. Use verified evidence only.",
+)
+
+
+def _make_provider_narrative_fake(style: str):
+    """
+    Build a fake generate_text() standing in for one provider's real output: same
+    required headings/structure as any other provider (so the pipeline's
+    validation/injection behaves identically), but with wording tagged by
+    `style` so the test can prove narrative text is genuinely allowed to differ.
+    """
+
+    async def fake_generate_text(system_prompt: str, user_message: str, settings: Settings) -> str:
+        headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
+        if any(h.startswith("# SECTION 3:") for h in headings):
+            return (
+                "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
+                f"## 3.1 Applicability Assessment\n\n[{style}] Local business serving Austin, TX.\n\n"
+                f"## 3.2 Local Location Opportunities\n\n[{style}] Narrative on local expansion.\n\n"
+                "## 3.3 Audience & Market Expansion Opportunities\n\nNot applicable.\n"
+            )
+        return "\n\n".join(f"{h}\n\n[{style}] Generated narrative for this section." for h in headings)
+
+    return fake_generate_text
+
+
+class TestProviderParity:
+
+    async def test_gemini_openai_perplexity_produce_structurally_identical_reports(
+        self, settings: Settings,
+    ) -> None:
+        context = build_frozen_audit_context()
+        assembled: dict[str, AssembledReportResult] = {}
+
+        for provider, style in (("gemini", "Gemini"), ("openai", "OpenAI"), ("perplexity", "Perplexity")):
+            settings.llm_provider = provider  # Documents which provider this run represents
+            with patch(
+                "src.services.report_service.generate_text", side_effect=_make_provider_narrative_fake(style)
+            ):
+                sections = await generate_report_sections(context, _PROVIDER_PARITY_TEMPLATE, settings)
+            assembled[provider] = assemble_and_validate_report(
+                sections, _PROVIDER_PARITY_TEMPLATE.master_report_structure, context
+            )
+
+        for provider, result in assembled.items():
+            assert result.markdown_report, f"{provider} produced an empty report"
+
+        # Every provider must produce exactly the same validation verdict — a genuine
+        # per-provider discrepancy would show up as different issues here. (This
+        # simplified template's PART 3 "## 3.2"/"## 3.3" On-Page headings share a
+        # prefix with SECTION 3's own "## 3.2"/"## 3.3" — a pre-existing,
+        # already-documented _validate_location_section() limitation, out of scope
+        # for this plan — so the same template-level issue is expected identically
+        # across all three providers, not a parity failure.)
+        issues = {provider: result.issues for provider, result in assembled.items()}
+        assert issues["openai"] == issues["gemini"]
+        assert issues["perplexity"] == issues["gemini"]
+
+        reports = {provider: result.markdown_report for provider, result in assembled.items()}
+
+        # Headings (PART/SECTION/subsection/table) and their order must be byte-identical —
+        # they are deterministically templated/injected, never provider-authored.
+        headings = {
+            provider: re.findall(r"^#{1,3} .+$", markdown, re.MULTILINE) for provider, markdown in reports.items()
+        }
+        assert headings["openai"] == headings["gemini"]
+        assert headings["perplexity"] == headings["gemini"]
+
+        # Table blocks — columns, row counts, factual values, and citations — are all
+        # force-injected from the same AuditContext, so they must match exactly too.
+        tables = {provider: _find_table_blocks(markdown) for provider, markdown in reports.items()}
+        assert tables["openai"] == tables["gemini"]
+        assert tables["perplexity"] == tables["gemini"]
+
+        # Narrative wording is the one thing allowed to differ between providers —
+        # confirms the parity above isn't trivially true from byte-identical mock output.
+        assert reports["gemini"] != reports["openai"]
+        assert reports["gemini"] != reports["perplexity"]
+        assert "[Gemini]" in reports["gemini"]
+        assert "[OpenAI]" in reports["openai"]
+        assert "[Perplexity]" in reports["perplexity"]
+
+
+
+
+
+
 

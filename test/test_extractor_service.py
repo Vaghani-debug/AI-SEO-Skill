@@ -507,6 +507,7 @@ def _make_page_resource(
     is_success: bool = True,
     used_playwright_fallback: bool = False,
     redirect_chain: list[str] | None = None,
+    attempt_count: int = 1,
 ) -> FetchedResource:
     return FetchedResource(
         url=url,
@@ -518,6 +519,7 @@ def _make_page_resource(
         is_fetched=True,
         used_playwright_fallback=used_playwright_fallback,
         redirect_chain=redirect_chain or [],
+        attempt_count=attempt_count,
     )
 
 
@@ -626,6 +628,13 @@ class TestBuildPageEvidence:
         result = build_page_evidence(resource, PageType.CORE, "https://example.com")
 
         assert result.redirect_chain == ["https://example.com/old-about"]
+
+    def test_attempt_count_is_passed_through(self) -> None:
+        resource = _make_page_resource(attempt_count=3)
+
+        result = build_page_evidence(resource, PageType.CORE, "https://example.com")
+
+        assert result.attempt_count == 3
 
     def test_links_and_images_classified(self) -> None:
         html = (

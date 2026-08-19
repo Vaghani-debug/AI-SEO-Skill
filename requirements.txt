@@ -27,8 +27,8 @@ lxml==6.1.1                       # Fast XML/HTML parser backend — 6.x series 
 
 # --- AI / LLM ----------------------------------------------------------------
 
-google-generativeai==0.8.3        # Google Gemini SDK — used for LLM-based SEO report generation
-openai==1.59.7                    # OpenAI-compatible async client for Perplexity report generation
+google-genai==2.18.1              # Google GenAI SDK — Interactions API + google_search grounding (Gemini provider)
+openai==2.44.0                    # OpenAI-compatible async client — Perplexity, and OpenAI Responses API web_search tool
 
 # --- PDF Generation ----------------------------------------------------------
 

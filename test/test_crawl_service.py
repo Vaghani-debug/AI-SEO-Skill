@@ -27,7 +27,7 @@ from src.services.crawl_service import (
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from src.services.extractor_service import RobotsTxtEvidence
-from src.services.fetch_service import FetchedResource, SiteFetchResult
+from src.services.fetch_service import FetchedResource, SiteFetchResult, is_confirmed_transient_failure
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +360,7 @@ class TestCrawlSampledPages:
         s.crawl_concurrency = 5
         s.crawl_max_page_bytes = 2_000_000
         s.crawl_js_shell_word_threshold = 0  # These tests only exercise the httpx path, not the Playwright fallback
+        s.fetch_retry_attempts = 1  # Retry behaviour is covered separately by TestCrawlSampledPagesRetry
         return s
 
     async def test_empty_sample_returns_empty_list(self) -> None:
@@ -452,6 +453,82 @@ class TestCrawlSampledPages:
 
         assert [r.url for r in result] == urls
         assert all(r.is_success for r in result)
+
+
+class TestCrawlSampledPagesRetry:
+    """Tests for the shared fetch_service retry/backoff policy applied to sampled-page requests."""
+
+    def _settings(self, retry_attempts: int = 3) -> Settings:
+        s = Settings()
+        s.fetch_timeout_seconds = 5
+        s.fetch_max_redirects = 3
+        s.crawl_concurrency = 5
+        s.crawl_max_page_bytes = 2_000_000
+        s.crawl_js_shell_word_threshold = 0
+        s.fetch_retry_attempts = retry_attempts
+        s.fetch_retry_backoff_base_seconds = 0.01
+        return s
+
+    async def test_retries_transient_503_then_succeeds(self) -> None:
+        inventory = _make_page_inventory(["https://example.com/about"])
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_mock_response(503, "Service Unavailable", url="https://example.com/about"),
+            _make_mock_response(200, "<html>About</html>", url="https://example.com/about"),
+        ])
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+
+        with patch("src.services.crawl_service.httpx.AsyncClient", return_value=client), \
+             patch("src.services.fetch_service.asyncio.sleep", AsyncMock()):
+            result = await crawl_sampled_pages(inventory, None, self._settings())
+
+        assert result[0].is_success is True
+        assert result[0].attempt_count == 2  # One retry was needed
+        assert client.get.call_count == 2
+
+    async def test_exhausts_retries_and_confirms_persistent_failure(self) -> None:
+        inventory = _make_page_inventory(["https://example.com/unstable"])
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.ConnectTimeout("timed out"))
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+
+        with patch("src.services.crawl_service.httpx.AsyncClient", return_value=client), \
+             patch("src.services.fetch_service.asyncio.sleep", AsyncMock()):
+            result = await crawl_sampled_pages(inventory, None, self._settings(retry_attempts=3))
+
+        assert result[0].is_success is False
+        assert result[0].attempt_count == 3       # Retried until fetch_retry_attempts was exhausted
+        assert client.get.call_count == 3
+        assert is_confirmed_transient_failure(result[0]) is True
+
+    async def test_no_retry_on_real_404(self) -> None:
+        """A real 404 is deterministic — retrying would not change the outcome."""
+        inventory = _make_page_inventory(["https://example.com/missing"])
+        response = _make_mock_response(404, "Not Found", url="https://example.com/missing")
+        client = _make_async_client_mock({"https://example.com/missing": response})
+
+        with patch("src.services.crawl_service.httpx.AsyncClient", return_value=client):
+            result = await crawl_sampled_pages(inventory, None, self._settings())
+
+        assert result[0].status_code == 404
+        assert result[0].attempt_count == 1
+        assert is_confirmed_transient_failure(result[0]) is False
+
+    async def test_content_type_rejection_is_not_retried(self) -> None:
+        """A non-HTML content-type is a deterministic skip, not a transient failure."""
+        inventory = _make_page_inventory(["https://example.com/file.pdf"])
+        response = _make_mock_response(text="%PDF-1.4", url="https://example.com/file.pdf")
+        response.headers = {"content-type": "application/pdf"}
+        client = _make_async_client_mock({"https://example.com/file.pdf": response})
+
+        with patch("src.services.crawl_service.httpx.AsyncClient", return_value=client):
+            result = await crawl_sampled_pages(inventory, None, self._settings())
+
+        assert result[0].is_success is False
+        assert "content-type" in result[0].error_message
+        assert result[0].attempt_count == 1
 
 
 def _make_playwright_context_manager(

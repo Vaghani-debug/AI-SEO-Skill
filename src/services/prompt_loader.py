@@ -4,7 +4,7 @@ src/services/prompt_loader.py
 Runtime context loader for the LLM report generator.
 
 Responsibility: read the project's Copilot customisation files from disk
-and package them as a PromptContext that the report_service passes to Gemini.
+and package them as a PromptContext that the report_service passes to the configured LLM provider.
 
 Why this module exists
 ----------------------

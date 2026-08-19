@@ -233,21 +233,10 @@ SECTION 3 must contain either 3.2 or 3.3, never both filled in, and never both e
 
 ---
 
-# Structured Data, Off-Page & Execution Sections (SECTIONS 4-6)
+# Structured Data & Off-Page Sections (SECTIONS 4-5)
 
 - SECTION 4: Recommend only schema types genuinely applicable to the business type observed in the evidence (e.g. LocalBusiness, Product, Article, FAQPage, Organization). Do not recommend schema unrelated to the site's content.
 - SECTION 5: Off-page and GEO recommendations must be general best-practice guidance grounded in the site's actual content and industry — never fabricated backlink counts or named link sources that were not verified. Section 5.1 must also summarize the "Existing brand presence" evidence provided (real, cited directory/social/press mentions found for this brand) as a Brand Presence assessment; if none were found with a citable source, state that plainly rather than inventing any. Domain Authority and a specific backlink count are never stated — this MVP does not measure them (docs/SEO_RULES.md Section 5 marks both optional and undetectable without a paid API).
-- SECTION 6: The 30/60/90-day plan and KPI dashboard must reference issues and recommendations already established earlier in the report. Do not introduce new findings here.
-
----
-
-# Methodology, Limitations & Sources (SECTION 8)
-
-SECTION 8 must:
-
-- Describe the audit methodology in plain language: sampled crawl coverage, deterministic technical checks, and cited external research.
-- State data limitations honestly, including that only a sample of subpages was analyzed and that keyword/competitor figures are estimates, not measured data.
-- Populate the Source Register table with one row per external claim used in SECTIONS 1-5, citing the same Source/Retrieved values used in those sections. Do not leave the table empty if any external claims were made elsewhere in the report; do not fabricate rows if no external claims were made.
 
 ---
 
@@ -278,14 +267,6 @@ Use the same issue names everywhere.
 Use the same recommendation everywhere.
 
 Avoid contradictions between sections.
-
----
-
-# Executive Summary
-
-The Executive Summary must summarize the findings from the entire report.
-
-Never introduce new findings that are not supported elsewhere.
 
 ---
 
@@ -332,8 +313,6 @@ Before returning the report, verify that:
 ✓ SECTION 3 contains exactly one completed subsection (3.2 or 3.3), with the other marked not applicable.
 
 ✓ No mention of Perplexity, Comet browser, ChatGPT, Google Docs, or any AI-tool branding, chat transcript text, or references to prior conversations/attachments appears anywhere.
-
-✓ SECTION 8's Source Register lists every external claim made in SECTIONS 1-5, with no fabricated rows.
 
 ✓ Section 2.4 either states the real Core Web Vitals/PageSpeed values from the evidence or clearly states that no data was collected — never a fabricated number.
 

@@ -39,8 +39,6 @@ The report must:
 
 • Help business owners understand priorities.
 
-• Provide an executive summary.
-
 • Generate a professional PDF suitable for client delivery.
 
 • Support interactive AI conversations after report generation.
@@ -192,17 +190,6 @@ structure defined in `.github/report_templates/MASTER_REPORT_STRUCTURE.md`:
 
 8. SECTION 5 — Off-Page SEO & GEO Strategy
 
-9. SECTION 6 — Prioritized Execution Plan & KPIs
-
-10. SECTION 7 — Executive Summary
-
-11. SECTION 8 — Methodology, Limitations & Sources
-
-The Executive Summary (SECTION 7) is generated last — after every other
-section's findings and research are complete — but is placed near the end of
-the document, immediately before Methodology, so it reads as a synthesis of
-the full audit rather than a lead-in.
-
 The PDF adds a cover header (website URL, name, audit date) and document
 metadata (title/author/subject) around this Markdown body; these are PDF
 presentation elements, not separate report sections.
@@ -265,69 +252,6 @@ Status
 
 Good
 
----
-
-# SECTION 2
-
-# Executive Summary
-
-This is the most important page.
-
-Most users should understand the website health without reading the rest of the report.
-
-Include:
-
-Overall SEO Score
-
-Website Health
-
-Total Issues
-
-Critical Issues
-
-High Issues
-
-Medium Issues
-
-Low Issues
-
-Passed Checks
-
-Top Five Priorities
-
-AI Executive Summary
-
-Estimated Overall Improvement Potential
-
-Estimated Development Effort
-
-Estimated Business Impact
-
----
-
-# AI Executive Summary
-
-The AI should write a concise executive summary containing:
-
-Current website health.
-
-Overall strengths.
-
-Major weaknesses.
-
-Most important opportunities.
-
-Business impact.
-
-Overall recommendation.
-
-Maximum:
-
-400 words.
-
-Tone:
-
-Professional.
 
 Non-technical.
 
