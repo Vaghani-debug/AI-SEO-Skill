@@ -7,8 +7,7 @@
  *   3. POSTs it to the FastAPI audit endpoint
  *   4. Shows a loading state while the server is working
  *   5. Renders the returned Markdown report as HTML using marked.js
- *   6. Enables the PDF download button
- *   7. Handles and displays errors in a user-friendly way
+ *   6. Handles and displays errors in a user-friendly way
  *
  * No framework or build step is required — this is plain ES6 JavaScript
  * loaded directly by the browser.
@@ -16,13 +15,6 @@
 
 "use strict";
 // "use strict" enables strict mode: catches common bugs like undeclared variables
-
-// ---------------------------------------------------------------------------
-// Module-level state
-// ---------------------------------------------------------------------------
-
-let currentPdfUrl = null;
-// currentPdfUrl stores the pdf_download_url from the API response
 
 // ---------------------------------------------------------------------------
 // DOM element references
@@ -38,7 +30,6 @@ const reportSection  = document.getElementById("report-section");  // White card
 const reportMeta     = document.getElementById("report-meta");     // Small text showing URL and audit time
 const reportBody     = document.getElementById("report-body");     // Article element where Markdown is rendered
 const auditBtn       = document.getElementById("audit-btn");       // The "Audit" button
-const downloadBtn    = document.getElementById("download-btn");    // The "Download PDF" button
 
 
 // ---------------------------------------------------------------------------
@@ -134,8 +125,6 @@ async function handleAudit() {
     // Parse the JSON body of the 202 Accepted response
     // This should match the AuditResult model in src/api/models.py
 
-    currentPdfUrl = data.pdf_download_url || "";
-
     renderReport(data);
     // Render the Markdown report and show the report section
 
@@ -195,23 +184,6 @@ function renderReport(data) {
 
 
 // ---------------------------------------------------------------------------
-// downloadPdf()
-// ---------------------------------------------------------------------------
-// Called when the user clicks the Download PDF button.
-// Opens the PDF download endpoint in a new tab, which triggers the browser's
-// file download dialog.
-
-function downloadPdf() {
-  if (!currentPdfUrl) {
-    showError("No PDF available. Please run an audit first.");
-    return;
-  }
-
-  window.open(currentPdfUrl, "_blank");
-}
-
-
-// ---------------------------------------------------------------------------
 // UI helper functions
 // ---------------------------------------------------------------------------
 
@@ -248,7 +220,6 @@ function resetSections() {
   errorMessage.textContent = "";
   reportMeta.innerHTML = "";
   reportBody.innerHTML = "";
-  currentPdfUrl = null;
 }
 
 function resetUI() {

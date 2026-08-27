@@ -12,7 +12,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- viewport meta: makes the page scale correctly on mobile devices and tablets -->
 
-  <meta name="description" content="AI-powered SEO audit tool. Enter a website URL and receive a professional SEO audit report with a downloadable PDF.">
+  <meta name="description" content="AI-powered SEO audit tool. Enter a website URL and receive a professional SEO audit report.">
   <!-- description meta: describes the page for search engines and browser history -->
 
   <title>AI SEO Agent — SEO Audit Tool</title>
@@ -181,21 +181,10 @@
            - hidden initially; app.js removes the hidden class when the report is ready -->
 
       <div class="report-header">
-        <!-- report-header: row containing the title and the PDF download button -->
+        <!-- report-header: row containing the report title -->
 
         <h2 class="report-title">SEO Audit Report</h2>
         <!-- report-title: section heading for the generated report -->
-
-        <button
-          type="button"
-          id="download-btn"
-          class="btn btn-success"
-          onclick="downloadPdf()"
-        >
-          ⬇ Download PDF
-        </button>
-        <!-- download button: triggers downloadPdf() in app.js which opens the PDF endpoint
-             - shown alongside the report so the user can download at any time -->
 
       </div>
       <!-- end report-header -->
