@@ -27,7 +27,6 @@ class TestCreateJob:
         assert job_one.status == AuditJobStatus.PENDING
         assert job_one.normalized_url == "https://example.com"
         assert job_one.markdown_report is None
-        assert job_one.pdf_path is None
         assert job_one.error is None
 
     def test_created_job_is_immediately_retrievable(self) -> None:
@@ -69,19 +68,17 @@ class TestUpdateJob:
 
         assert updated.updated_at >= original_updated_at
 
-    def test_records_markdown_report_and_pdf_path_on_completion(self) -> None:
+    def test_records_markdown_report_on_completion(self) -> None:
         job = create_job("https://example.com")
 
         updated = update_job(
             job.audit_id,
             status=AuditJobStatus.COMPLETE,
             markdown_report="# Report",
-            pdf_path="/reports/abc.pdf",
         )
 
         assert updated.status == AuditJobStatus.COMPLETE
         assert updated.markdown_report == "# Report"
-        assert updated.pdf_path == "/reports/abc.pdf"
 
     def test_records_error_on_failure(self) -> None:
         job = create_job("https://example.com")

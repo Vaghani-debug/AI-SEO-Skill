@@ -361,11 +361,6 @@ class TestRealFileContent:
         content_lower = result.ai_guidelines.lower()
         assert "critical" in content_lower or "severity" in content_lower
 
-    def test_master_report_structure_mentions_pdf(self) -> None:
-        """MASTER_REPORT_STRUCTURE.md must reference PDF as the output format."""
-        result = load_prompt_context()
-        assert "pdf" in result.master_report_structure.lower()
-
     def test_master_report_structure_ends_at_section_five(self) -> None:
         """The canonical report must exclude the removed Sections 6-8."""
         result = load_prompt_context()

@@ -6,11 +6,10 @@ Integration tests for the SEO audit API endpoints.
 Tests cover all three routes:
     POST /api/v1/audits/         — start audit (success + error paths)
     GET  /api/v1/audits/{id}     — retrieve a stored audit
-    GET  /api/v1/audits/{id}/pdf — download the PDF report
     GET  /health                 — liveness check
 
-All five services (url_service, fetch_service, extractor_service,
-report_service, pdf_service) and prompt_loader are mocked so these tests
+All four services (url_service, fetch_service, extractor_service,
+report_service) and prompt_loader are mocked so these tests
 run fully offline and never call Gemini or make real HTTP requests.
 
 Run with:
@@ -18,18 +17,15 @@ Run with:
 """
 
 import json  # Used to write fixture JSON files for the GET retrieval tests
-import re  # Used to extract PART/SECTION headings from LLM user_message text in fake_generate_text
 import uuid  # Used to pin start_audit()'s generated job/audit_id in job-tracking tests
 from datetime import datetime, timezone  # For constructing fixture ReportResult objects
-from pathlib import Path  # Used to create fixture PDF and JSON files in tmp_path
+from pathlib import Path  # Used to create fixture JSON files in tmp_path
 from unittest.mock import AsyncMock, MagicMock, patch  # All mocking tools needed
 
 import pytest  # Test runner
 from fastapi.testclient import TestClient  # Synchronous HTTP test client for FastAPI
 
 from src.main import app  # The FastAPI application under test
-from src.services.prompt_loader import PromptContext  # Used to build a real (non-mocked) template for the new pipeline
-from test.fixtures.frozen_audit_context import build_frozen_audit_context  # Step 18's frozen, anonymized AuditContext
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +95,6 @@ def _make_report_result(audit_id: str = "test-audit-id-001") -> MagicMock:
     )
 
 
-def _mock_pdf_path(tmp_path: Path, audit_id: str) -> Path:
-    """Create a minimal placeholder PDF file and return its path."""
-    pdf = tmp_path / "reports" / f"{audit_id}.pdf"
-    pdf.parent.mkdir(parents=True, exist_ok=True)
-    pdf.write_bytes(b"%PDF-1.4 minimal test pdf content")  # Valid PDF magic bytes
-    return pdf
-
-
 def _mock_json_path(tmp_path: Path, audit_id: str, url: str = "https://example.com") -> Path:
     """Create a report JSON file and return its path."""
     json_path = tmp_path / "reports" / f"{audit_id}.json"
@@ -121,30 +109,6 @@ def _mock_json_path(tmp_path: Path, audit_id: str, url: str = "https://example.c
     return json_path
 
 
-# A real (non-mocked) PromptContext with a simplified template covering every
-# _SECTION_GROUPS heading, used only by the real deterministic-block pipeline test below —
-# not the full production MASTER_REPORT_STRUCTURE.md, whose SECTION 3 sub-heading wording
-# is unrelated to what this test verifies.
-_NEW_PIPELINE_PROMPT_CONTEXT = PromptContext(
-    audit_prompt="Audit {{website_url}}.",
-    seo_skill="Priority: Crawlability, Technical, On-Page, Content.",
-    master_report_structure=(
-        "# PART 1: FULL WEBSITE AUDIT\n\nBody.\n\n"
-        "# PART 2: TECHNICAL SEO AUDIT\n\nBody.\n\n"
-        "# PART 3: ON-PAGE & CONTENT AUDIT\n\nBody.\n\n"
-        "# SECTION 1: KEYWORD OPPORTUNITY STRATEGY\n\nBody.\n\n"
-        "# SECTION 2: COMPETITOR ANALYSIS\n\nBody.\n\n"
-        "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
-        "## 3.1 Applicability Assessment\nBody.\n"
-        "## 3.2 Local Location Opportunities\nBody.\n"
-        "## 3.3 Audience & Market Expansion Opportunities\nNot applicable.\n\n"
-        "# SECTION 4: STRUCTURED DATA RECOMMENDATIONS\n\nBody.\n\n"
-        "# SECTION 5: OFF-PAGE SEO & GEO STRATEGY\n\nBody.\n"
-    ),
-    ai_guidelines="Never invent findings. Use verified evidence only.",
-)
-
-
 # ---------------------------------------------------------------------------
 # Helper: patch all five services for a successful full-pipeline run
 # ---------------------------------------------------------------------------
@@ -156,7 +120,6 @@ def _patch_full_pipeline(tmp_path: Path, audit_id: str = "test-audit-id-001"):
     """
     import contextlib
 
-    pdf_path = _mock_pdf_path(tmp_path, audit_id)  # Create the PDF file before the test runs
     report = _make_report_result(audit_id)
 
     @contextlib.contextmanager
@@ -182,156 +145,10 @@ def _patch_full_pipeline(tmp_path: Path, audit_id: str = "test-audit-id-001"):
                 "src.api.routes.audit.generate_report",
                 new=AsyncMock(return_value=report),
             ),
-            patch(
-                "src.api.routes.audit.generate_pdf",
-                return_value=pdf_path,  # Return the pre-created PDF path
-            ),
         ):
             yield
 
     return _ctx()
-
-
-# ---------------------------------------------------------------------------
-# Helper: patch all services for a successful new-pipeline run
-# ---------------------------------------------------------------------------
-
-def _patch_new_pipeline(tmp_path: Path, audit_id: str = "test-audit-id-002"):
-    """
-    Return a context manager that patches the new sampled-crawl + section
-    pipeline (build_site_evidence/build_audit_context/generate_report_sections/
-    assemble_and_validate_report) to simulate a complete successful audit
-    without any real network, crawl, or LLM calls.
-    """
-    import contextlib
-
-    pdf_path = _mock_pdf_path(tmp_path, audit_id)
-
-    context = MagicMock()
-    context.audit_id = audit_id
-    context.created_at = datetime(2026, 7, 9, 14, 0, 0, tzinfo=timezone.utc)
-
-    assembled = MagicMock()
-    assembled.markdown_report = "# SEO Audit Report\n\n## Executive Summary\n\nGood site."
-    assembled.issues = []
-    assembled.is_valid = True
-
-    @contextlib.contextmanager
-    def _ctx():
-        with (
-            patch(
-                "src.api.routes.audit._settings.reports_dir",
-                str(tmp_path / "reports"),
-            ),
-            patch("src.api.routes.audit._settings.use_new_report_pipeline", True),
-            patch(
-                "src.api.routes.audit.load_prompt_context",
-                return_value=MagicMock(),  # PromptContext mock
-            ),
-            patch(
-                "src.api.routes.audit.build_site_evidence",
-                new=AsyncMock(return_value=MagicMock()),  # SiteEvidence mock
-            ),
-            patch(
-                "src.api.routes.audit.build_audit_context",
-                new=AsyncMock(return_value=context),
-            ),
-            patch(
-                "src.api.routes.audit.generate_report_sections",
-                new=AsyncMock(return_value={"site_inventory": "..."}),
-            ),
-            patch(
-                "src.api.routes.audit.assemble_and_validate_report",
-                return_value=assembled,
-            ),
-            patch(
-                "src.api.routes.audit.generate_pdf",
-                return_value=pdf_path,  # Return the pre-created PDF path
-            ),
-        ):
-            yield
-
-    return _ctx()
-
-
-class TestStartAuditNewPipeline:
-    """Tests for the new section pipeline, enabled via settings.use_new_report_pipeline."""
-
-    def test_returns_202_with_assembled_report(self, client: TestClient, tmp_path: Path) -> None:
-        """A valid URL returns HTTP 202 with the assembled report's Markdown and audit ID."""
-        with _patch_new_pipeline(tmp_path):
-            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
-        assert response.status_code == 202
-        data = response.json()
-        assert data["audit_id"] == "test-audit-id-002"
-        assert "Executive Summary" in data["markdown_report"]
-
-    def test_legacy_fetch_is_not_called(self, client: TestClient, tmp_path: Path) -> None:
-        """The old fetch_site()/extract() flow is skipped entirely when the flag is on."""
-        with _patch_new_pipeline(tmp_path), patch("src.api.routes.audit.fetch_site") as fetch_mock:
-            client.post("/api/v1/audits/", json={"url": "https://example.com"})
-        fetch_mock.assert_not_called()
-
-    def test_invalid_validation_issues_do_not_block_the_response(
-        self, client: TestClient, tmp_path: Path
-    ) -> None:
-        """A checkpoint failure (is_valid=False) still returns the assembled report, not an error."""
-        with _patch_new_pipeline(tmp_path) as _, patch(
-            "src.api.routes.audit.assemble_and_validate_report",
-            return_value=MagicMock(
-                markdown_report="# SEO Audit Report\n\nPartial content.",
-                issues=["Missing required PART headings: PART 9"],
-                is_valid=False,
-            ),
-        ):
-            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
-        assert response.status_code == 202
-        assert "Partial content" in response.json()["markdown_report"]
-
-    def test_new_pipeline_report_is_built_from_real_deterministic_blocks(
-        self, client: TestClient, tmp_path: Path
-    ) -> None:
-        """
-        End-to-end through the real generate_report_sections()/assemble_and_validate_report(),
-        fed Step 18's frozen AuditContext, with only the underlying LLM call mocked. Proves the
-        assembled report's factual content (page URLs, robots directive, competitor name,
-        keyword text) comes from real deterministic renderers/injection over real evidence —
-        not merely whatever text a mocked ReportResult/assembled object happened to contain.
-        """
-        audit_id = "frozen-fixture-audit-0001"
-        pdf_path = _mock_pdf_path(tmp_path, audit_id)
-        context = build_frozen_audit_context()
-
-        async def fake_generate_text(system_prompt: str, user_message: str, settings) -> str:
-            headings = re.findall(r"# (?:PART|SECTION) \d+:[^\n]*", user_message)
-            if any(h.startswith("# SECTION 3:") for h in headings):
-                return (
-                    "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY\n\n"
-                    "## 3.1 Applicability Assessment\n\nLocal business serving Austin, TX.\n\n"
-                    "## 3.2 Local Location Opportunities\n\nGenerated narrative.\n\n"
-                    "## 3.3 Audience & Market Expansion Opportunities\n\nNot applicable.\n"
-                )
-            return "\n\n".join(f"{h}\n\nGenerated narrative for this section." for h in headings)
-
-        with (
-            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
-            patch("src.api.routes.audit._settings.use_new_report_pipeline", True),
-            patch("src.api.routes.audit.load_prompt_context", return_value=_NEW_PIPELINE_PROMPT_CONTEXT),
-            patch("src.api.routes.audit.build_site_evidence", new=AsyncMock(return_value=MagicMock())),
-            patch("src.api.routes.audit.build_audit_context", new=AsyncMock(return_value=context)),
-            patch("src.services.report_service.generate_text", side_effect=fake_generate_text),
-            patch("src.api.routes.audit.generate_pdf", return_value=pdf_path),
-        ):
-            response = client.post("/api/v1/audits/", json={"url": "https://sample-bakery-co.test"})
-
-        assert response.status_code == 202
-        markdown_report = response.json()["markdown_report"]
-
-        # Deterministic block proof — none of this text is in fake_generate_text's output.
-        assert "https://sample-bakery-co.test/services/custom-cakes" in markdown_report  # Core/Subpages Table
-        assert "/cart/" in markdown_report  # robots.txt Disallow rule, rendered verbatim
-        assert "Anonymized Competitor Bakery" in markdown_report  # Competitor Overview Table
-        assert "artisan sourdough bread austin" in markdown_report  # Primary Keywords Table
 
 
 # ---------------------------------------------------------------------------
@@ -346,30 +163,6 @@ class TestStartAuditSuccess:
         with _patch_full_pipeline(tmp_path):
             response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
         assert response.status_code == 202  # 202 Accepted for async-style operations
-
-    def test_legacy_pipeline_never_calls_new_pipeline_functions(
-        self, client: TestClient, tmp_path: Path
-    ) -> None:
-        """
-        With use_new_report_pipeline explicitly False (the shipped default), the legacy
-        one-shot flow runs unchanged and none of the new sampled-crawl/section-generation
-        functions are ever touched.
-        """
-        with (
-            _patch_full_pipeline(tmp_path),
-            patch("src.api.routes.audit._settings.use_new_report_pipeline", False),
-            patch("src.api.routes.audit.build_site_evidence") as build_site_evidence_mock,
-            patch("src.api.routes.audit.build_audit_context") as build_audit_context_mock,
-            patch("src.api.routes.audit.generate_report_sections") as generate_sections_mock,
-            patch("src.api.routes.audit.assemble_and_validate_report") as assemble_mock,
-        ):
-            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
-
-        assert response.status_code == 202
-        build_site_evidence_mock.assert_not_called()
-        build_audit_context_mock.assert_not_called()
-        generate_sections_mock.assert_not_called()
-        assemble_mock.assert_not_called()
 
     def test_response_contains_audit_id(self, client: TestClient, tmp_path: Path) -> None:
         """The response body contains a non-empty audit_id."""
@@ -386,14 +179,6 @@ class TestStartAuditSuccess:
         data = response.json()
         assert "markdown_report" in data
         assert len(data["markdown_report"]) > 0  # Report is not empty
-
-    def test_response_contains_pdf_download_url(self, client: TestClient, tmp_path: Path) -> None:
-        """The response body includes a PDF download URL."""
-        with _patch_full_pipeline(tmp_path):
-            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
-        data = response.json()
-        assert "pdf_download_url" in data
-        assert "/pdf" in data["pdf_download_url"]  # URL ends with /pdf
 
     def test_response_contains_normalised_url(self, client: TestClient, tmp_path: Path) -> None:
         """The response url field contains the normalised website URL."""
@@ -517,27 +302,6 @@ class TestStartAuditServiceErrors:
             response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
         assert response.status_code == 500  # Configuration error → 500
 
-    def test_pdf_failure_does_not_abort_audit(self, client: TestClient, tmp_path: Path) -> None:
-        """A PDF generation failure does not abort the audit — report is still returned."""
-        audit_id = "pdf-fail-test"
-        report = _make_report_result(audit_id)
-        with (
-            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
-            patch("src.api.routes.audit.fetch_site", new=AsyncMock(return_value=_make_site_fetch_result())),
-            patch("src.api.routes.audit.extract", return_value=MagicMock()),
-            patch("src.api.routes.audit.load_prompt_context", return_value=MagicMock()),
-            patch("src.api.routes.audit.generate_report", new=AsyncMock(return_value=report)),
-            patch(
-                "src.api.routes.audit.generate_pdf",
-                side_effect=Exception("ReportLab failed"),  # PDF fails
-            ),
-        ):
-            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
-        # Report still returns 202 — PDF failure is non-fatal
-        assert response.status_code == 202
-        assert response.json()["markdown_report"]  # Markdown still present
-        assert response.json()["pdf_download_url"] == ""  # Empty URL when PDF unavailable
-
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/audits/ — in-process job tracking (Phase 5)
@@ -611,19 +375,17 @@ class TestGetAuditStatus:
         assert data["status"] == "pending"
         assert data["url"] == "https://example.com"
         assert data["error"] is None
-        assert data["pdf_download_url"] is None
 
-    def test_completed_job_includes_pdf_download_url(self, client: TestClient) -> None:
-        """A COMPLETE job with a pdf_path exposes a pdf_download_url."""
+    def test_completed_job_status_reflects_complete(self, client: TestClient) -> None:
+        """A COMPLETE job status is reflected in the status response."""
         from src.services.audit_job_service import create_job, update_job
         from src.services.audit_models import AuditJobStatus
 
         job = create_job("https://example.com")
-        update_job(job.audit_id, status=AuditJobStatus.COMPLETE, pdf_path="/reports/x.pdf")
+        update_job(job.audit_id, status=AuditJobStatus.COMPLETE)
         response = client.get(f"/api/v1/audits/{job.audit_id}/status")
         data = response.json()
         assert data["status"] == "complete"
-        assert data["pdf_download_url"] == f"/api/v1/audits/{job.audit_id}/pdf"
 
     def test_failed_job_includes_error_message(self, client: TestClient) -> None:
         """A FAILED job's error message is exposed in the status response."""
@@ -682,53 +444,6 @@ class TestGetAudit:
         detail = response.json().get("detail", "")
         assert len(detail) > 10     # A real message
         assert "Traceback" not in detail
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/audits/{audit_id}/pdf — download
-# ---------------------------------------------------------------------------
-
-class TestDownloadPdf:
-    """Tests for the PDF download endpoint."""
-
-    def test_known_id_with_pdf_returns_200(self, client: TestClient, tmp_path: Path) -> None:
-        """A valid audit_id with an existing PDF file returns 200 OK."""
-        audit_id = "pdf-download-test"
-        _mock_pdf_path(tmp_path, audit_id)
-        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
-            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
-        assert response.status_code == 200
-
-    def test_pdf_response_has_correct_content_type(self, client: TestClient, tmp_path: Path) -> None:
-        """The PDF download response has Content-Type: application/pdf."""
-        audit_id = "pdf-content-type-test"
-        _mock_pdf_path(tmp_path, audit_id)
-        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
-            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
-        assert "application/pdf" in response.headers.get("content-type", "")
-
-    def test_pdf_response_has_content_disposition_header(self, client: TestClient, tmp_path: Path) -> None:
-        """The PDF response includes a Content-Disposition header for the download dialog."""
-        audit_id = "pdf-header-test"
-        _mock_pdf_path(tmp_path, audit_id)
-        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
-            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
-        # Content-Disposition header tells the browser to save, not display
-        assert "content-disposition" in response.headers
-
-    def test_unknown_id_returns_404(self, client: TestClient, tmp_path: Path) -> None:
-        """An audit_id with no PDF file returns 404 Not Found."""
-        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
-            response = client.get("/api/v1/audits/no-such-pdf/pdf")
-        assert response.status_code == 404
-
-    def test_pdf_body_starts_with_pdf_magic_bytes(self, client: TestClient, tmp_path: Path) -> None:
-        """The downloaded file starts with the PDF magic bytes %%PDF-."""
-        audit_id = "pdf-bytes-test"
-        _mock_pdf_path(tmp_path, audit_id)
-        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
-            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
-        assert response.content[:5] == b"%PDF-"  # Valid PDF signature
 
 
 # ---------------------------------------------------------------------------
