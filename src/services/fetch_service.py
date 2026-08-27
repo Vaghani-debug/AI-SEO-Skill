@@ -275,9 +275,8 @@ def is_transient_status_code(status_code: int) -> bool:
     """
     True for HTTP status codes that a retry might reasonably fix (429/5xx).
 
-    Public so callers that only have a bare status code — e.g. analysis_service.py
-    deciding how to word a PageEvidence finding — can apply the same rule used by
-    is_transient_failure() without re-declaring the status code set.
+    Public so any caller that only has a bare status code can apply the same
+    rule used by is_transient_failure() without re-declaring the status code set.
     """
     return status_code in _TRANSIENT_STATUS_CODES
 
@@ -286,9 +285,8 @@ def is_transient_failure(resource: FetchedResource) -> bool:
     """
     True when a retry might succeed: 429/5xx responses, timeouts, or connection errors.
 
-    Public (not module-private) so other services — e.g. crawl_service.py's
-    sampled-page crawl — can reuse the exact same retry-eligibility rule
-    instead of re-implementing it.
+    Public (not module-private) so other services can reuse the exact same
+    retry-eligibility rule instead of re-implementing it.
     """
     if is_transient_status_code(resource.status_code):
         return True
@@ -323,9 +321,8 @@ async def retry_on_transient_failure(
     failure, using the same exponential backoff policy as fetch_site().
 
     This is the single retry/backoff implementation shared by every caller
-    that fetches over HTTP during an audit (fetch_service's own resource
-    fetches and crawl_service's sampled-page crawl), so retry eligibility
-    and backoff timing can never drift between them.
+    that fetches over HTTP during an audit, so retry eligibility and backoff
+    timing can never drift between callers.
 
     Args:
         attempt: A zero-argument async callable that makes exactly one HTTP

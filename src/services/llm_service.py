@@ -3,9 +3,8 @@ src/services/llm_service.py
 
 Provider-neutral LLM boundary. Centralizes provider validation, API-key
 checks, empty-response checks, retry/backoff, and the Gemini/Perplexity/
-OpenAI adapters themselves, so report_service.py and research_service.py
-can call one dispatcher instead of each re-implementing provider branching
-and error handling.
+OpenAI adapters themselves, so report_service.py can call one dispatcher
+instead of re-implementing provider branching and error handling.
 
 Report generation calls are tool-free (the LLM only synthesizes supplied
 evidence). Research calls always use each provider's live web search:
@@ -123,8 +122,7 @@ async def call_with_retry(
     """
     Call make_call(), retrying transient failures with exponential backoff.
 
-    Shared by every provider adapter so retry/backoff behavior (previously
-    duplicated across fetch_service.py and research_service.py) lives in
+    Shared by every provider adapter so retry/backoff behavior lives in
     one place.
 
     Args:

@@ -66,7 +66,6 @@ def update_job(
     *,
     status: AuditJobStatus | None = None,
     markdown_report: str | None = None,
-    pdf_path: str | None = None,
     error: str | None = None,
 ) -> AuditJob:
     """
@@ -79,7 +78,6 @@ def update_job(
         audit_id: The job to update.
         status: New lifecycle phase, if transitioning.
         markdown_report: The assembled report, once available.
-        pdf_path: The rendered PDF's path, once available.
         error: Human-readable failure reason, once the job has failed.
 
     Returns:
@@ -96,8 +94,6 @@ def update_job(
         job.status = status
     if markdown_report is not None:
         job.markdown_report = markdown_report
-    if pdf_path is not None:
-        job.pdf_path = pdf_path
     if error is not None:
         job.error = error
 
