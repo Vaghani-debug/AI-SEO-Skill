@@ -62,8 +62,7 @@ app = FastAPI(
     version=settings.app_version,  # "0.1.0" — shown in /docs
     description=(
         "AI-powered SEO auditing platform. "
-        "Enter a website URL, receive a professional SEO audit report, "
-        "and download it as a PDF."
+        "Enter a website URL and receive a professional SEO audit report."
     ),  # Long description shown at the top of /docs
     docs_url="/docs",  # Swagger UI available at http://127.0.0.1:8000/docs
     redoc_url="/redoc",  # ReDoc UI available at http://127.0.0.1:8000/redoc

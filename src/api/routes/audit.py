@@ -9,40 +9,29 @@ This module remains thin.  Routes only:
   3. Return a structured response or raise an HTTPException
 
 No business logic lives here.  All SEO analysis, fetching, LLM calls,
-PDF generation, and storage belong to the service layer.
+and storage belong to the service layer.
 
 Endpoints:
     POST /api/v1/audits/                — run a full audit and return the report
     GET  /api/v1/audits/{id}             — retrieve a stored audit by ID
     GET  /api/v1/audits/{id}/status      — get the in-process job's current status
-    GET  /api/v1/audits/{id}/pdf         — download the PDF report
 """
 
-import json  # json.loads/dumps used to persist audit results as JSON alongside the PDF
+import json  # json.loads/dumps used to persist audit results as JSON
 import logging  # Standard logging — records every request start, completion, and error
 import uuid  # uuid.uuid4 generates one audit_id shared by the job record and the report
-from pathlib import Path  # Path used to read/write JSON and PDF files in the reports/ folder
+from pathlib import Path  # Path used to read/write JSON files in the reports/ folder
 
 from fastapi import APIRouter, HTTPException, status  # Router, HTTP error helper, status codes
-from fastapi.responses import FileResponse  # FileResponse streams the PDF as a binary download
 
 from src.api.models import AuditError, AuditRequest, AuditResult, AuditStatusResult  # Pydantic request/response models
 from src.config import get_settings  # Application settings — API key, model name, reports dir
 from src.services.audit_job_service import create_job, get_job, update_job  # In-process job tracking (Phase 5)
 from src.services.audit_models import AuditJobStatus  # Job lifecycle enum
-from src.services.crawl_service import build_site_evidence  # New pipeline: orchestrated multi-page crawl
 from src.services.extractor_service import extract  # Extracts verified SEO data from fetched HTML
 from src.services.fetch_service import fetch_site  # Fetches homepage, robots.txt, and sitemaps
-from src.services.pdf_service import generate_pdf  # Converts Markdown report to a PDF file
 from src.services.prompt_loader import PromptContext, load_prompt_context  # Loads guidance files from disk
-from src.services.report_service import (  # Report generation — old one-shot flow and the new section pipeline
-    ReportIntegrityError,
-    ReportResult,
-    assemble_and_validate_report,
-    build_audit_context,
-    generate_report,
-    generate_report_sections,
-)
+from src.services.report_service import ReportResult, generate_report  # Report generation
 from src.services.url_service import normalize_and_validate  # Normalises and validates the input URL
 
 # Module-level logger
@@ -60,7 +49,7 @@ router = APIRouter(
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/audits/
-# Run a complete SEO audit and return the Markdown report + PDF download URL.
+# Run a complete SEO audit and return the Markdown report.
 # ---------------------------------------------------------------------------
 
 @router.post(
@@ -70,8 +59,8 @@ router = APIRouter(
     summary="Start an SEO audit",
     description=(
         "Accepts a website URL, fetches the site, extracts verified SEO data, "
-        "generates a Markdown report using the configured LLM provider, saves a PDF, and returns the "
-        "completed report with a PDF download URL."
+        "generates a Markdown report using the configured LLM provider, and returns the "
+        "completed report."
     ),
     responses={
         400: {"model": AuditError, "description": "Invalid URL or unsupported scheme"},
@@ -85,13 +74,10 @@ async def start_audit(request: AuditRequest) -> AuditResult:
     Pipeline:
       1. Validate and normalise the URL.
       2. Load prompt, skill, and report docs from disk.
-      3-5. Fetch/crawl, extract evidence, and generate the Markdown report
-           (legacy one-shot flow or new section pipeline — see
-           settings.use_new_report_pipeline and the two _generate_report_*
-           helpers below).
-      6. Generate the PDF file.
-      7. Persist the report JSON for later retrieval.
-      8. Return the result to the UI.
+      3-5. Fetch the homepage, extract evidence, and generate the Markdown
+           report in a single LLM call (see _generate_report_legacy_pipeline()).
+      6. Persist the report JSON for later retrieval.
+      7. Return the result to the UI.
     """
     logger.info("Audit requested for URL: %s", request.url)  # Log the raw user input
 
@@ -132,39 +118,14 @@ async def start_audit(request: AuditRequest) -> AuditResult:
                 detail=f"Server configuration error: {missing_file}. Contact the administrator.",
             )
 
-        # --- Steps 3-5: Fetch/crawl, extract evidence, and generate the report --
-        #
-        # settings.use_new_report_pipeline selects which flow runs. Both flows end
-        # in the same ReportResult shape so PDF generation/persistence below never
-        # needs to know which pipeline produced it.
+        # --- Steps 3-5: Fetch, extract evidence, and generate the report -------
 
         update_job(job_audit_id, status=AuditJobStatus.GENERATING)
-        if _settings.use_new_report_pipeline:
-            report_result = await _generate_report_new_pipeline(normalized_url, prompt_context, job_audit_id)
-        else:
-            report_result = await _generate_report_legacy_pipeline(normalized_url, prompt_context, job_audit_id)
+        report_result = await _generate_report_legacy_pipeline(normalized_url, prompt_context, job_audit_id)
 
         audit_id: str = report_result.audit_id  # Unique ID for this audit — used as filename
 
-        # --- Step 6: Generate the PDF file ------------------------------------
-
-        update_job(job_audit_id, status=AuditJobStatus.RENDERING_PDF)
-        try:
-            pdf_path = generate_pdf(
-                audit_id=audit_id,
-                normalized_url=normalized_url,
-                markdown_report=report_result.markdown_report,
-                created_at=report_result.created_at,
-                settings=_settings,
-            )
-            # pdf_service converts the Markdown to a ReportLab PDF and saves it to reports/
-        except Exception as pdf_error:
-            # PDF generation failure — log but do not abort the audit
-            # The user can still see the Markdown report in the UI
-            logger.error("PDF generation failed for audit %s: %s", audit_id, pdf_error)
-            pdf_path = None  # PDF unavailable; download URL will be omitted
-
-        # --- Step 7: Persist the report JSON for later GET retrieval ----------
+        # --- Step 6: Persist the report JSON for later GET retrieval ----------
 
         _save_report_json(
             audit_id=audit_id,
@@ -178,19 +139,12 @@ async def start_audit(request: AuditRequest) -> AuditResult:
             job_audit_id,
             status=AuditJobStatus.COMPLETE,
             markdown_report=report_result.markdown_report,
-            pdf_path=pdf_path,
         )
     except HTTPException as http_error:
         update_job(job_audit_id, status=AuditJobStatus.FAILED, error=str(http_error.detail))
         raise
 
-    # --- Step 8: Return the response to the UI ----------------------------
-
-    pdf_download_url: str = (
-        f"/api/v1/audits/{audit_id}/pdf"  # Relative URL the UI uses for the download button
-        if pdf_path is not None
-        else ""  # Empty string signals to the UI that the PDF is unavailable
-    )
+    # --- Step 7: Return the response to the UI ----------------------------
 
     logger.info(
         "Audit complete: audit_id=%s, url=%s, report_length=%d chars",
@@ -200,16 +154,15 @@ async def start_audit(request: AuditRequest) -> AuditResult:
     )
 
     return AuditResult(
-        audit_id=audit_id,                              # UUID for retrieval and PDF download
+        audit_id=audit_id,                              # UUID for retrieval
         url=normalized_url,                             # Normalised URL shown in the UI meta row
         markdown_report=report_result.markdown_report,  # Full Markdown for the UI preview
-        pdf_download_url=pdf_download_url,              # Relative path for the PDF download button
         created_at=report_result.created_at,            # Timestamp shown in the UI meta row
     )
 
 
 # ---------------------------------------------------------------------------
-# Private helpers — report generation pipelines
+# Private helper — report generation pipeline
 # ---------------------------------------------------------------------------
 
 async def _generate_report_legacy_pipeline(
@@ -276,76 +229,6 @@ async def _generate_report_legacy_pipeline(
         )
 
 
-async def _generate_report_new_pipeline(
-    normalized_url: str, prompt_context: PromptContext, audit_id: str,
-) -> ReportResult:
-    """
-    New sampled-crawl + section pipeline: build a full SiteEvidence, score/
-    research it into one AuditContext, generate each report section, then
-    assemble and validate the whole document.
-
-    A narrative validation failure does not raise — generate_report_sections()
-    already retried each section once and substitutes a safe deterministic
-    fallback narrative if it still fails, so this just logs the checkpoint's
-    remaining issues and returns the assembled Markdown rather than blocking
-    the audit on imperfect prose. A deterministic-block integrity failure
-    (see ReportIntegrityError) is different: it can only be a pipeline bug,
-    so it does raise and this route turns it into a clean 500.
-    """
-    try:
-        site_evidence = await build_site_evidence(normalized_url, _settings)
-    except Exception as crawl_error:
-        # Unexpected fetch/crawl error — DNS failure, SSL error, etc.
-        logger.error("Site crawl failed for %s: %s", normalized_url, crawl_error)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not crawl the website: {crawl_error}. Please check the URL and try again.",
-        )
-
-    try:
-        context = await build_audit_context(normalized_url, site_evidence, _settings, audit_id=audit_id)
-        sections = await generate_report_sections(context, prompt_context, _settings)
-    except ValueError as api_key_error:
-        # API key not configured — configuration error
-        logger.error("LLM API key error: %s", api_key_error)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(api_key_error),  # Message says to add the key to .env
-        )
-    except RuntimeError as llm_error:
-        # LLM call failed — network, quota, safety filter, etc.
-        logger.error("LLM generation failed for %s: %s", normalized_url, llm_error)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Report generation failed: {llm_error}",
-        )
-
-    try:
-        assembled = assemble_and_validate_report(sections, prompt_context.master_report_structure, context)
-    except ReportIntegrityError as integrity_error:
-        # A deterministic block failed to survive assembly intact — always a
-        # pipeline bug, never an LLM content issue, so this fails the request
-        # rather than returning a silently corrupt report.
-        logger.error("Report integrity check failed for audit %s: %s", context.audit_id, integrity_error)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Report generation failed an internal consistency check. Please try again or contact support.",
-        )
-    if not assembled.is_valid:
-        # Checkpoint status only — the report is still returned to the user
-        logger.warning(
-            "Assembled report for audit %s has %d validation issue(s): %s",
-            context.audit_id, len(assembled.issues), assembled.issues,
-        )
-
-    return ReportResult(
-        audit_id=context.audit_id,
-        normalized_url=normalized_url,
-        markdown_report=assembled.markdown_report,
-        created_at=context.created_at,
-    )
-
-
 # ---------------------------------------------------------------------------
 # GET /api/v1/audits/{audit_id}/status
 # Report the in-process job's current lifecycle status (Phase 5 job tracking).
@@ -386,7 +269,6 @@ async def get_audit_status(audit_id: str) -> AuditStatusResult:
         created_at=job.created_at,
         updated_at=job.updated_at,
         error=job.error,
-        pdf_download_url=f"/api/v1/audits/{audit_id}/pdf" if job.pdf_path else None,
     )
 
 
@@ -428,47 +310,7 @@ async def get_audit(audit_id: str) -> AuditResult:
         audit_id=data["audit_id"],
         url=data["url"],
         markdown_report=data["markdown_report"],
-        pdf_download_url=f"/api/v1/audits/{audit_id}/pdf",  # PDF download URL is always derived from the ID
         created_at=datetime.fromisoformat(data["created_at"]),  # Deserialise the ISO timestamp string
-    )
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/audits/{audit_id}/pdf
-# Download the PDF report for a completed audit.
-# ---------------------------------------------------------------------------
-
-@router.get(
-    "/{audit_id}/pdf",
-    summary="Download the PDF report",
-    description="Streams the generated PDF report as a file download.",
-    responses={
-        200: {"content": {"application/pdf": {}}, "description": "PDF file download"},
-        404: {"model": AuditError, "description": "Audit or PDF not found"},
-    },
-)
-async def download_pdf(audit_id: str) -> FileResponse:
-    """
-    Stream the generated PDF report as a file download.
-
-    Reads the PDF file saved by generate_pdf() in the reports/ directory.
-    """
-    logger.info("PDF download requested for audit ID: %s", audit_id)
-
-    pdf_path = Path(_settings.reports_dir) / f"{audit_id}.pdf"
-    # Construct the expected file path from the audit ID
-
-    if not pdf_path.exists():
-        # PDF file missing — either generation failed or audit ID is wrong
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"PDF not found for audit: {audit_id}. Run the audit again to regenerate.",
-        )
-
-    return FileResponse(
-        path=str(pdf_path),           # Path to the PDF file on disk
-        media_type="application/pdf", # Correct MIME type for PDF — triggers browser download
-        filename=f"seo-audit-{audit_id[:8]}.pdf",  # Suggested download filename shown in the browser dialog
     )
 
 
@@ -479,7 +321,6 @@ async def download_pdf(audit_id: str) -> FileResponse:
 def _report_json_path(audit_id: str) -> Path:
     """Return the path to the JSON persistence file for the given audit ID."""
     return Path(_settings.reports_dir) / f"{audit_id}.json"
-    # Stored alongside the PDF: reports/{audit_id}.json and reports/{audit_id}.pdf
 
 
 def _save_report_json(

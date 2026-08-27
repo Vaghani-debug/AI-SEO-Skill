@@ -48,12 +48,12 @@ class AuditResult(BaseModel):
     Successful audit response returned to the UI after the audit completes.
 
     Contains the audit identifier, the normalised URL that was actually fetched,
-    the full Markdown report, and a URL the UI can use to download the PDF.
+    and the full Markdown report.
     """
 
     audit_id: str = Field(
         ...,  # Required — always present in a successful response
-        description="Unique identifier for this audit, used to retrieve the report and PDF later",
+        description="Unique identifier for this audit, used to retrieve the report later",
     )
 
     url: str = Field(
@@ -64,11 +64,6 @@ class AuditResult(BaseModel):
     markdown_report: str = Field(
         ...,  # Required — the full Markdown text of the audit report
         description="Full SEO audit report in Markdown format, ready for display in the UI",
-    )
-
-    pdf_download_url: str = Field(
-        ...,  # Required — relative path the UI uses to trigger the PDF download
-        description="Relative URL to the PDF download endpoint, e.g. /api/v1/audits/{audit_id}/pdf",
     )
 
     created_at: datetime = Field(
@@ -114,11 +109,6 @@ class AuditStatusResult(BaseModel):
         description="Error message if the job failed, otherwise null",
     )
 
-    pdf_download_url: Optional[str] = Field(
-        default=None,  # Only present once the PDF has been generated
-        description="Relative URL to download the PDF once available, otherwise null",
-    )
-
 
 class AuditError(BaseModel):
     """
@@ -141,28 +131,4 @@ class AuditError(BaseModel):
     detail: Optional[str] = Field(
         default=None,  # Optional technical detail; only included when it helps diagnosis
         description="Optional technical detail for developers (stack trace summary, exception type, etc.)",
-    )
-
-
-class ReportDownload(BaseModel):
-    """
-    Metadata returned alongside a PDF file download.
-
-    FastAPI's FileResponse handles the binary content; this model
-    captures the descriptive metadata the UI might display.
-    """
-
-    audit_id: str = Field(
-        ...,  # Required — links this download to the originating audit
-        description="Audit identifier that the PDF was generated from",
-    )
-
-    filename: str = Field(
-        ...,  # Required — the suggested filename for the downloaded file
-        description="Suggested filename for the PDF download, e.g. seo-audit-2026-07-09.pdf",
-    )
-
-    url: str = Field(
-        ...,  # Required — normalised URL of the site that was audited
-        description="Normalised URL of the audited website, included for display purposes",
     )
