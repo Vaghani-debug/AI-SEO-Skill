@@ -1,15 +1,5 @@
 # {{website_url}} — SEO Audit Report
 
-### Report Metadata
-
-- Audit Date
-- Report Version
-- Prepared By
-- Pages Analyzed (Sampled Coverage)
-- Delivery Format: PDF
-
----
-
 # PART 1: FULL WEBSITE AUDIT — ALL PAGES & URLs
 
 ## 1.1 Core Pages

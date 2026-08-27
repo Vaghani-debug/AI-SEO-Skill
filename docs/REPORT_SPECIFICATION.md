@@ -39,7 +39,7 @@ The report must:
 
 • Help business owners understand priorities.
 
-• Generate a professional PDF suitable for client delivery.
+• Generate a professional Markdown report suitable for client delivery.
 
 • Support interactive AI conversations after report generation.
 
@@ -120,7 +120,7 @@ Users should immediately know:
 
 The platform shall support multiple output formats.
 
-## PDF
+## Markdown
 
 Primary format.
 
@@ -128,7 +128,7 @@ Professional.
 
 Client ready.
 
-Printable.
+Rendered directly in the UI.
 
 ---
 
@@ -157,21 +157,9 @@ Used by:
 
 ---
 
-## Markdown
-
-Future Version
-
-Useful for:
-
-- GitHub
-- Documentation
-- Internal reports
-
----
-
 # 5. Report Structure
 
-The report body is one continuous Markdown/PDF document following the canonical
+The report body is one continuous Markdown document following the canonical
 structure defined in `.github/report_templates/MASTER_REPORT_STRUCTURE.md`:
 
 1. PART 1 — Full Website Audit (All Pages & URLs)
@@ -189,10 +177,6 @@ structure defined in `.github/report_templates/MASTER_REPORT_STRUCTURE.md`:
 7. SECTION 4 — Structured Data Recommendations
 
 8. SECTION 5 — Off-Page SEO & GEO Strategy
-
-The PDF adds a cover header (website URL, name, audit date) and document
-metadata (title/author/subject) around this Markdown body; these are PDF
-presentation elements, not separate report sections.
 
 Each section has a dedicated specification in `MASTER_REPORT_STRUCTURE.md`.
 

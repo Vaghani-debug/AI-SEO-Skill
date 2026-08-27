@@ -6,6 +6,15 @@ Owner: Product Owner
 
 ---
 
+> **Implementation note:** The deterministic scoring engine described below
+> (analysis_service.py) was part of the new sampled-crawl + section pipeline,
+> which has been removed from the codebase. The current MVP uses the legacy
+> one-shot pipeline (fetch_service → extractor_service → report_service),
+> which does not compute a numeric SEO score. This document is retained as
+> the design specification for a future scoring engine implementation.
+
+---
+
 # 1. Purpose
 
 This document defines the official SEO scoring methodology for the AI SEO Agent.
