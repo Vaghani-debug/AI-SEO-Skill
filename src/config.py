@@ -132,85 +132,14 @@ class Settings(BaseSettings):
     )
 
     # --- PageSpeed Insights (Core Web Vitals / Performance) -------------------
-
-    pagespeed_enabled: bool = Field(
-        default=True,  # Free public API; disable only for offline/test environments without network access
-        description="When True, call Google PageSpeed Insights for real Core Web Vitals data",
-    )
-
-    pagespeed_api_key: str = Field(
-        default="",  # Empty default: PSI works unauthenticated at a low quota, a key raises the quota
-        description="Google PageSpeed Insights API key loaded from PAGESPEED_API_KEY in .env (optional)",
-    )
-
-    pagespeed_timeout_seconds: int = Field(
-        default=30,  # PSI runs a real Lighthouse audit server-side, so it is slower than a plain fetch
-        description="Timeout in seconds for the PageSpeed Insights API call",
-    )
-
-    # --- Sitemap Inventory / Crawl Sampling -----------------------------------
-
-    sitemap_inventory_limit: int = Field(
-        default=500,  # Total distinct page URLs recorded in the site inventory, across all sitemaps
-        description="Maximum number of URLs to record when building the full sitemap inventory",
-    )
-
-    sitemap_index_max_depth: int = Field(
-        default=3,  # A sitemap index pointing to sitemaps that point to more indexes, three levels deep
-        description="Maximum recursion depth when resolving nested sitemap index files",
-    )
-
-    crawl_sample_limit: int = Field(
-        default=30,  # Deliberately smaller than sitemap_inventory_limit — only a representative sample is crawled
-        description="Maximum number of pages selected from the inventory for the deterministic crawl sample",
-    )
-
-    crawl_core_page_limit: int = Field(
-        default=10,  # Core/navigation pages are prioritized but still bounded so one site can't consume the whole sample
-        description="Maximum number of core/navigation pages included in the crawl sample",
-    )
-
-    crawl_sample_per_type_limit: int = Field(
-        default=5,  # Five representative pages per non-core page type (service/product, blog, location, category, utility)
-        description="Maximum number of pages sampled per non-core page type in the crawl sample",
-    )
-
-    crawl_concurrency: int = Field(
-        default=5,  # Bounded concurrency so the audited site is not overloaded with simultaneous requests
-        description="Maximum number of sampled pages crawled concurrently",
-    )
-
-    crawl_max_page_bytes: int = Field(
-        default=2_000_000,  # ~2 MB; large enough for real pages, small enough to protect memory/LLM context
-        description="Maximum response size in bytes accepted when crawling a sampled page",
-    )
-
-    crawl_js_shell_word_threshold: int = Field(
-        default=50,  # Pages with fewer visible words than this are treated as JS shells needing rendering
-        description="Minimum visible word count before an httpx-fetched page is considered a JS shell",
-    )
-
-    playwright_navigation_timeout_ms: int = Field(
-        default=30_000,  # 30 seconds, per project Playwright navigation timeout convention
-        description="Navigation timeout in milliseconds for the Playwright rendering fallback",
-    )
+    # (Removed: pagespeed_enabled/pagespeed_api_key/pagespeed_timeout_seconds
+    # were only used by the deleted sampled-crawl pipeline's pagespeed_service.)
 
     # --- Report Storage ------------------------------------------------------
 
     reports_dir: str = Field(
-        default="reports",  # Local folder where generated .md and .pdf files are saved by audit_id
+        default="reports",  # Local folder where generated .md and .json report files are saved by audit_id
         description="Directory path (relative to project root) where audit reports are stored",
-    )
-
-    # --- Report Pipeline -----------------------------------------------------
-
-    use_new_report_pipeline: bool = Field(
-        default=False,  # Old one-shot generate_report() flow remains the default until the new path is proven
-        description=(
-            "When True, audits run through the new sampled-crawl + section-generation "
-            "pipeline (build_site_evidence/build_audit_context/generate_report_sections) "
-            "instead of the original one-shot AuditEvidence flow"
-        ),
     )
 
     # --- Application ---------------------------------------------------------

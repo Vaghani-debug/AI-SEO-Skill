@@ -30,16 +30,6 @@ lxml==6.1.1                       # Fast XML/HTML parser backend — 6.x series 
 google-genai==2.18.1              # Google GenAI SDK — Interactions API + google_search grounding (Gemini provider)
 openai==2.44.0                    # OpenAI-compatible async client — Perplexity, and OpenAI Responses API web_search tool
 
-# --- PDF Generation ----------------------------------------------------------
-
-reportlab==4.2.5                  # PDF generation library — converts Markdown report content to PDF
-markdown==3.7                     # Parses Markdown to plain text/structure before PDF rendering
-
-# --- Browser Rendering --------------------------------------------------------
-
-playwright==1.62.0                 # Headless Chromium fallback for JS-rendered pages the httpx crawler can't read
-                                    # After installing: run `playwright install chromium` to fetch the browser binary
-
 # --- Testing -----------------------------------------------------------------
 
 pytest==8.3.4                     # Test runner for all unit and integration tests
