@@ -58,10 +58,6 @@ docs/SEO_RULES.md
 
 SEO methodology.
 
-docs/SCORING_ENGINE.md
-
-SEO scoring logic.
-
 docs/REPORT_SPECIFICATION.md
 
 Report structure.

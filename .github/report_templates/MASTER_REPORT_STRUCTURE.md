@@ -6,7 +6,7 @@
 
 ### Core Pages Table
 
-| #Index | Page Name (derived from URL) | URL | Title Tag | SEO Notes |
+| #Index | Page Name (derived from URL) | URL | Title Tag | SEO Recommendation |
 |--------|-------------------------------|-----|-----------|-----------|
 
 ## 1.2 Subpages (Sampled)
@@ -27,7 +27,7 @@
 
 ### Website Structure Table
 
-| Navigation Area | Pages/Items | SEO Notes |
+| Navigation Area | Pages/Items | SEO Recommendation |
 |-------------------|--------------|-----------|
 
 (Rows must cover: Website Hierarchy, Primary Navigation, Secondary Navigation, Footer Navigation, URL Structure Review.)
@@ -36,7 +36,7 @@
 
 ### Website Coverage Table
 
-| Category | Count | Example URLs | Notes |
+| Category | Count | Example URLs | SEO Recommendation |
 |----------|-------|--------------|-------|
 
 (Rows must cover: Existing Pages, Missing Pages, Orphan Pages, Duplicate Pages, Thin Content Pages, Pages Requiring Improvement.)
@@ -52,7 +52,7 @@
 
 ### Weaknesses Table
 
-| # | Weakness | Business Impact | Recommendation |
+| # | Weakness | Business Impact | SEO Recommendation |
 |---|----------|------------------|-----------------|
 
 ---
@@ -63,7 +63,7 @@
 
 ### Issues Table
 
-| Issue | Severity | Business Impact | Recommendation |
+| Issue | Severity | Business Impact | SEO Recommendation |
 |-------|----------|------------------|-----------------|
 
 ## 2.2 Robots.txt Analysis
@@ -84,14 +84,14 @@
 
 ### Homepage Elements Table
 
-| Element | Current | Issue | Recommended |
+| Element | Current | Issue | SEO Recommended |
 |---------|---------|-------|-------------|
 
 ## 3.2 Priority Pages On-Page Review
 
 ### Priority Pages Table
 
-| Page | Title Tag Issue | Meta Description Issue | Heading Issue | Recommendation |
+| Page | Title Tag Issue | Meta Description Issue | Heading Issue | SEO Recommendation |
 |------|------------------|-------------------------|----------------|-----------------|
 
 ## 3.3 Content Quality Assessment
@@ -142,10 +142,10 @@
 
 ## 3.2 Local Location Opportunities (if the business serves specific locations)
 
-### Location Opportunity Table
+### City-Wise Keyword Volume & Competition Table
 
-| City/Region | Primary Keyword | Est. Monthly Searches | Priority | Source | Retrieved |
-|-------------|-------------------|-------------------------|----------|--------|-----------|
+| # | Target City / Region | Primary Keyword | Est. Monthly Searches | Competition Level | Priority | Source | Retrieved |
+|---|----------------------|-----------------|-------------------------|-------------------|----------|--------|-----------|
 
 ## 3.3 Audience & Market Expansion Opportunities (if location targeting does not apply)
 

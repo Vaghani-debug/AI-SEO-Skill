@@ -58,16 +58,17 @@ body {
 /* --- Main content area ----------------------------------------------------- */
 
 .main-content {
-  max-width: 900px; /* Limit width so long lines do not become hard to read */
+  max-width: 1140px; /* Generous width for multi-column tables and comfortable reading */
   margin: 2rem auto; /* Centre the content and add vertical space below the header */
-  padding: 0 1rem; /* Horizontal padding so content does not touch screen edges on mobile */
+  padding: 0 1.25rem; /* Horizontal padding so content does not touch screen edges on mobile */
 }
 
 
 /* --- Audit form ------------------------------------------------------------ */
 
 .audit-form-section {
-  margin-bottom: 2rem; /* Space between the form and the sections that appear after it */
+  max-width: 860px; /* Keep the input form card neatly proportioned */
+  margin: 0 auto 2rem; /* Space between the form and the sections that appear after it */
 }
 
 .form-card {
@@ -175,6 +176,12 @@ body {
   margin: 0; /* Remove default paragraph margins */
 }
 
+.loading-timer {
+  font-weight: 700;
+  color: #0f3460;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Spinner: an animated ring drawn with CSS borders */
 .spinner {
   width: 48px; /* Width of the spinning ring */
@@ -241,7 +248,54 @@ body {
 .report-meta {
   font-size: 0.875rem; /* Slightly smaller than body — this is supporting information */
   color: #6b7280; /* Muted grey */
-  margin-bottom: 1.5rem; /* Space between meta and the report body */
+  margin-bottom: 1rem; /* Space between meta and the metrics row */
+}
+
+/* --- Audit metrics summary cards ------------------------------------------- */
+
+.report-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.875rem;
+  margin-bottom: 1.5rem;
+}
+
+.metric-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.875rem 1.15rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+}
+
+.metric-label {
+  font-size: 0.725rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+}
+
+.metric-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f3460;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.metric-subtext {
+  font-size: 0.725rem;
+  color: #94a3b8;
 }
 
 .report-body {
@@ -273,29 +327,92 @@ body {
   margin-top: 1.5rem; /* Space above sub-subsections */
 }
 
+/* Responsive container around rendered tables */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  margin: 1.25rem 0;
+  -webkit-overflow-scrolling: touch;
+}
+
 .report-body table {
   width: 100%; /* Full-width tables */
+  table-layout: auto; /* Natural column sizing based on content */
   border-collapse: collapse; /* Remove gaps between table cells */
-  margin: 1rem 0; /* Vertical space around tables */
-  font-size: 0.9rem; /* Slightly smaller text in tables */
+  margin: 1.25rem 0; /* Vertical space around tables */
+  font-size: 0.875rem; /* Readable font size for complex data tables */
+  line-height: 1.5;
 }
 
 .report-body th {
   background: #f0f4ff; /* Light blue header row */
   font-weight: 600; /* Bold column headings */
-  padding: 0.6rem 0.9rem; /* Cell padding */
+  padding: 0.65rem 0.85rem; /* Cell padding */
   text-align: left; /* Left-align header text */
   border: 1px solid #dde3ec; /* Light border around cells */
+  color: #1a1a2e;
+  vertical-align: bottom;
 }
 
 .report-body td {
-  padding: 0.6rem 0.9rem; /* Same padding as header cells */
+  padding: 0.65rem 0.85rem; /* Same padding as header cells */
   border: 1px solid #dde3ec; /* Consistent border */
   vertical-align: top; /* Top-align multi-line cell content */
+  color: #2d3748;
+}
+
+/* Index / numerical identifier columns: shrink to fit tight content */
+.report-body th.col-index,
+.report-body td.col-index {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+  font-weight: 600;
+  color: #4a5568;
+}
+
+/* Short metadata / date / status columns: compact, no awkward wrapping */
+.report-body th.col-compact,
+.report-body td.col-compact {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* URL and technical link columns: wrap cleanly without stretching column */
+.report-body th.col-url,
+.report-body td.col-url {
+  max-width: 240px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+/* Heavily populated content, notes, and recommendation columns: expand to fill available space */
+.report-body th.col-expand,
+.report-body td.col-expand {
+  min-width: 220px;
+  width: auto;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .report-body tr:nth-child(even) {
   background: #f9fbfd; /* Zebra striping on even rows for easy reading */
+}
+
+/* HTML Bullet lists inside table cells */
+.report-body td ul,
+.report-body td ol {
+  padding-left: 1.15rem;
+  margin: 0.2rem 0;
+}
+
+.report-body td li {
+  margin-bottom: 0.35rem;
+  line-height: 1.45;
+}
+
+.report-body td li:last-child {
+  margin-bottom: 0;
 }
 
 .report-body code {

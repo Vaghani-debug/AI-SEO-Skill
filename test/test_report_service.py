@@ -198,7 +198,22 @@ class TestGenerateReportSuccess:
                 audit_id="fixed-job-id-123",
             )
 
-        assert result.audit_id == "fixed-job-id-123"  # Pre-generated ID reused, not replaced
+        assert result.audit_id == "fixed-job-id-123"
+
+    async def test_report_result_contains_metrics(
+        self, settings: Settings, prompt_context: PromptContext,
+    ) -> None:
+        """ReportResult contains non-negative elapsed_seconds, input/output tokens, and estimated cost."""
+        evidence = _make_evidence()
+        mock_generate_text = _make_gemini_mock("# SEO Report\n\nTest content.")
+
+        with patch("src.services.report_service.generate_text", mock_generate_text):
+            result = await generate_report("https://example.com", evidence, prompt_context, settings)
+
+        assert result.elapsed_seconds >= 0.0
+        assert result.input_tokens > 0
+        assert result.output_tokens > 0
+        assert result.estimated_cost_usd >= 0.0  # Pre-generated ID reused, not replaced
 
     async def test_normalized_url_stored(self, settings: Settings, prompt_context: PromptContext) -> None:
         """normalized_url in the result matches the input URL."""

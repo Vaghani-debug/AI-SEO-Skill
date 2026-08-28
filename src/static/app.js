@@ -24,12 +24,21 @@
 
 const urlInput       = document.getElementById("website-url");    // The URL text input
 const loadingSection = document.getElementById("loading-section"); // Spinner + message shown while waiting
+const loadingTimer   = document.getElementById("loading-timer");   // Live seconds counter while waiting
 const errorSection   = document.getElementById("error-section");   // Red error card shown on failure
 const errorMessage   = document.getElementById("error-message");   // Paragraph filled with the error text
 const reportSection  = document.getElementById("report-section");  // White card containing the audit report
 const reportMeta     = document.getElementById("report-meta");     // Small text showing URL and audit time
 const reportBody     = document.getElementById("report-body");     // Article element where Markdown is rendered
 const auditBtn       = document.getElementById("audit-btn");       // The "Audit" button
+
+const metricElapsed      = document.getElementById("metric-elapsed");       // Elapsed seconds badge
+const metricCost         = document.getElementById("metric-cost");          // Incurred cost badge
+const metricCostSubtext  = document.getElementById("metric-cost-subtext");  // Currency/model subtext
+const metricInputTokens  = document.getElementById("metric-input-tokens");  // Input tokens badge
+const metricOutputTokens = document.getElementById("metric-output-tokens"); // Output tokens badge
+
+let auditTimerInterval = null; // Reference for active live-timer interval
 
 
 // ---------------------------------------------------------------------------
@@ -65,6 +74,20 @@ async function handleAudit() {
 
   showSection(loadingSection);
   // Reveal the spinner and "Analysing website…" message
+
+  const auditStartTime = Date.now();
+  if (loadingTimer) {
+    loadingTimer.textContent = "(0.0s)";
+  }
+  if (auditTimerInterval) {
+    clearInterval(auditTimerInterval);
+  }
+  auditTimerInterval = setInterval(() => {
+    if (loadingTimer) {
+      const elapsed = (Date.now() - auditStartTime) / 1000;
+      loadingTimer.textContent = `(${elapsed.toFixed(1)}s)`;
+    }
+  }, 100);
 
   disableAuditButton(true);
   // Disable the button so the user cannot submit a second request while one is in progress
@@ -140,6 +163,11 @@ async function handleAudit() {
   } finally {
     // finally always runs, whether the try succeeded or the catch handled an error
 
+    if (auditTimerInterval) {
+      clearInterval(auditTimerInterval);
+      auditTimerInterval = null;
+    }
+
     disableAuditButton(false);
     // Re-enable the Audit button so the user can submit another URL
   }
@@ -165,12 +193,49 @@ function renderReport(data) {
   // Fill the meta row with the audited URL (as a link) and the audit timestamp
   // rel="noopener noreferrer" prevents the opened tab from accessing window.opener (security)
 
+  // Populate the 3 core execution metric fields: Elapsed seconds, Incurred cost, and Tokens
+  if (metricElapsed) {
+    const elapsedVal = typeof data.elapsed_seconds === "number" ? data.elapsed_seconds : 0;
+    metricElapsed.textContent = `${elapsedVal.toFixed(1)}s`;
+  }
+
+  if (metricCost) {
+    const costVal = typeof data.estimated_cost_usd === "number" ? data.estimated_cost_usd : 0;
+    if (costVal <= 0) {
+      metricCost.textContent = "$0.00";
+    } else if (costVal < 0.0001) {
+      metricCost.textContent = "<$0.0001";
+    } else {
+      metricCost.textContent = `$${costVal.toFixed(4)}`;
+    }
+  }
+
+  if (metricCostSubtext) {
+    const costVal = typeof data.estimated_cost_usd === "number" ? data.estimated_cost_usd : 0;
+    // Approximate EUR value (assuming ~0.92 EUR per USD)
+    const eurVal = costVal * 0.92;
+    metricCostSubtext.textContent = `~€${eurVal.toFixed(4)} est.`;
+  }
+
+  if (metricInputTokens) {
+    const inTok = typeof data.input_tokens === "number" ? data.input_tokens : 0;
+    metricInputTokens.textContent = inTok.toLocaleString();
+  }
+
+  if (metricOutputTokens) {
+    const outTok = typeof data.output_tokens === "number" ? data.output_tokens : 0;
+    metricOutputTokens.textContent = outTok.toLocaleString();
+  }
+
   const markdownText = data.markdown_report || "_No report content returned._";
   // Use the Markdown string from the API; fall back to a placeholder if absent
 
   reportBody.innerHTML = marked.parse(markdownText);
   // marked.parse() converts Markdown text to an HTML string
   // Assigning to innerHTML renders it as actual HTML elements inside the article
+
+  formatReportTables(reportBody);
+  // Auto-size table columns and wrap tables in responsive scroll containers
 
   hideSection(loadingSection);
   // Hide the spinner now that the report is ready
@@ -180,6 +245,68 @@ function renderReport(data) {
 
   reportSection.scrollIntoView({ behavior: "smooth", block: "start" });
   // Smoothly scroll the page so the report is visible without the user having to scroll manually
+}
+
+
+// ---------------------------------------------------------------------------
+// formatReportTables(container)
+// ---------------------------------------------------------------------------
+// Identifies column types by header text and applies sizing classes.
+
+function formatReportTables(container) {
+  const tables = container.querySelectorAll("table");
+  tables.forEach((table) => {
+    // Wrap table in a responsive scroll container if not already wrapped
+    if (!table.parentElement.classList.contains("table-responsive")) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "table-responsive";
+      table.parentNode.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+    }
+
+    const headers = table.querySelectorAll("th");
+    headers.forEach((th, index) => {
+      const text = th.textContent.trim().toLowerCase();
+      let colType = "";
+
+      if (text === "#" || text === "#index" || text === "index" || text === "# index" || text === "no.") {
+        colType = "col-index";
+      } else if (
+        text === "priority" ||
+        text === "severity" ||
+        text === "retrieved" ||
+        text === "source" ||
+        text === "count" ||
+        text === "element" ||
+        text === "status" ||
+        text === "current" ||
+        text.includes("competition")
+      ) {
+        colType = "col-compact";
+      } else if (text.includes("url") || text === "website" || text.includes("link")) {
+        colType = "col-url";
+      } else if (
+        text.includes("recommend") ||
+        text.includes("note") ||
+        text.includes("impact") ||
+        text.includes("issue") ||
+        text.includes("matter") ||
+        text.includes("gap") ||
+        text.includes("focus") ||
+        text.includes("strategy") ||
+        text.includes("structure")
+      ) {
+        colType = "col-expand";
+      }
+
+      if (colType) {
+        th.classList.add(colType);
+        table.querySelectorAll(`tr > :nth-child(${index + 1})`).forEach((cell) => {
+          cell.classList.add(colType);
+        });
+      }
+    });
+  });
 }
 
 
@@ -213,6 +340,14 @@ function hideSection(element) {
 function resetSections() {
   // Hide all dynamic sections and clear their content before starting a new audit
 
+  if (auditTimerInterval) {
+    clearInterval(auditTimerInterval);
+    auditTimerInterval = null;
+  }
+  if (loadingTimer) {
+    loadingTimer.textContent = "(0.0s)";
+  }
+
   hideSection(loadingSection); // Hide spinner
   hideSection(errorSection);   // Hide error card
   hideSection(reportSection);  // Hide report card
@@ -220,6 +355,11 @@ function resetSections() {
   errorMessage.textContent = "";
   reportMeta.innerHTML = "";
   reportBody.innerHTML = "";
+
+  if (metricElapsed) metricElapsed.textContent = "—";
+  if (metricCost) metricCost.textContent = "—";
+  if (metricInputTokens) metricInputTokens.textContent = "—";
+  if (metricOutputTokens) metricOutputTokens.textContent = "—";
 }
 
 function resetUI() {

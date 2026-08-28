@@ -71,6 +71,26 @@ class AuditResult(BaseModel):
         description="UTC timestamp when the audit was completed",
     )
 
+    elapsed_seconds: float = Field(
+        default=0.0,
+        description="Total elapsed execution time for the audit in seconds",
+    )
+
+    input_tokens: int = Field(
+        default=0,
+        description="Number of prompt/input tokens used by the LLM",
+    )
+
+    output_tokens: int = Field(
+        default=0,
+        description="Number of completion/output tokens used by the LLM",
+    )
+
+    estimated_cost_usd: float = Field(
+        default=0.0,
+        description="Estimated LLM cost incurred in USD",
+    )
+
 
 class AuditStatusResult(BaseModel):
     """

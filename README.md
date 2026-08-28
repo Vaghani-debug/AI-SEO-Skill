@@ -277,7 +277,6 @@ The implementation follows the repository documentation:
 - `docs/PRODUCT.md`
 - `docs/ARCHITECTURE.md`
 - `docs/SEO_RULES.md`
-- `docs/SCORING_ENGINE.md`
 - `docs/REPORT_SPECIFICATION.md`
 - `docs/AI_REPORT_GUIDELINES.md`
 - `docs/Roadmap/MVP_PLAN.md`

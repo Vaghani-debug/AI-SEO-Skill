@@ -22,7 +22,6 @@ The system should:
 
 - Audit websites
 - Detect SEO issues
-- Calculate an SEO score
 - Prioritize findings
 - Generate AI recommendations
 - Produce a professional PDF report
@@ -252,18 +251,6 @@ Do not change report structure without explicit approval.
 
 ---
 
-# Scoring
-
-Follow:
-
-docs/SCORING_ENGINE.md
-
-Never invent scoring logic.
-
-Do not change scoring weights without updating the scoring specification.
-
----
-
 # Documentation
 
 Before implementing major features:
@@ -374,7 +361,6 @@ The following documents define project requirements:
 - docs/ARCHITECTURE.md
 - docs/SEO_RULES.md
 - docs/REPORT_SPECIFICATION.md
-- docs/SCORING_ENGINE.md
 - docs/AI_REPORT_GUIDELINES.md
 
 Follow all applicable instruction files under:
@@ -384,10 +370,10 @@ Follow all applicable instruction files under:
 including:
 
 - python.instructions.md
-- playwright.instructions.md
 - fastapi.instructions.md
 - seo.instructions.md
 - git.instructions.md
+- testing.instructions.md
 
 Repository-wide instructions and applicable path-specific instructions must both be followed.
 
@@ -397,17 +383,6 @@ If implementation conflicts with documentation, ask for clarification before cha
 
 ---
 
-# MVP Implementation Plan
-
-When implementing the MVP UI for website URL input, automated SEO audit generation, Markdown report preview, and downloadable PDF output, follow:
-
-docs/Roadmap/MVP_PLAN.md
-
-Treat this file as the active implementation roadmap for the current MVP phase.
-
-Do not deviate from the plan without explicit user instruction.
-
----
 
 # Final Principle
 

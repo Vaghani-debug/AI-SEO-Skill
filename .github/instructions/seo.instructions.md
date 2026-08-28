@@ -22,7 +22,6 @@ Before implementing any SEO feature, read the relevant source document.
 | SEO checks, audit categories, methodology | `docs/SEO_RULES.md` |
 | Report sections and structure | `docs/REPORT_SPECIFICATION.md` |
 | AI tone, severity language, recommendation format | `docs/AI_REPORT_GUIDELINES.md` |
-| Scoring weights and logic | `docs/SCORING_ENGINE.md` |
 | Architecture and module responsibilities | `docs/ARCHITECTURE.md` |
 | Product requirements | `docs/PRODUCT.md` |
 

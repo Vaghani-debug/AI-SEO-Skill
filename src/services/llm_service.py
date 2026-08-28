@@ -55,6 +55,32 @@ class LLMProviderError(RuntimeError):
 
 
 @dataclass
+class TokenUsage:
+    """Token consumption and estimated USD cost for one or more LLM requests."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+
+
+class LLMGenerationResult(str):
+    """
+    String result that also carries token usage and cost metadata.
+
+    Subclasses str so existing callers and test assertions that expect
+    a plain str work seamlessly without any breaking changes.
+    """
+
+    usage: TokenUsage
+
+    def __new__(cls, text: str, usage: TokenUsage | None = None) -> "LLMGenerationResult":
+        instance = super().__new__(cls, text)
+        instance.usage = usage or TokenUsage()
+        return instance
+
+
+@dataclass
 class ResearchCitation:
     """One real, resolvable source a provider's live web search actually returned."""
 
@@ -64,10 +90,83 @@ class ResearchCitation:
 
 @dataclass
 class ResearchResponse:
-    """Normalized live-web-search result: a provider's answer text plus its real citations."""
+    """Normalized live-web-search result: a provider's answer text plus its real citations and usage."""
 
     text: str
     citations: list[ResearchCitation] = field(default_factory=list)
+    usage: TokenUsage = field(default_factory=TokenUsage)
+
+
+def calculate_cost_usd(
+    provider: LLMProvider,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    search_calls: int = 0,
+) -> float:
+    """
+    Calculate estimated cost in USD based on provider model token rates and search fees.
+    """
+    input_tokens = max(0, input_tokens)
+    output_tokens = max(0, output_tokens)
+    search_calls = max(0, search_calls)
+
+    if provider == "perplexity":
+        m = model.lower()
+        if "sonar-pro" in m:
+            in_rate, out_rate, req_fee = 3.0, 15.0, 0.006
+        elif "sonar-reasoning" in m:
+            in_rate, out_rate, req_fee = 2.0, 8.0, 0.006
+        elif "sonar" in m:
+            in_rate, out_rate, req_fee = 1.0, 1.0, 0.005
+        else:
+            in_rate, out_rate, req_fee = 3.0, 15.0, 0.006
+        cost = (input_tokens / 1_000_000 * in_rate) + (output_tokens / 1_000_000 * out_rate) + req_fee
+        return round(cost, 6)
+
+    if provider == "gemini":
+        m = model.lower()
+        if "2.5-flash-lite" in m or "3.1-flash-lite" in m:
+            in_rate, out_rate = 0.10, 0.40
+        elif "2.5-flash" in m:
+            in_rate, out_rate = 0.30, 2.50
+        elif "3.7-flash" in m or "3.6-flash" in m:
+            in_rate, out_rate = 0.75, 3.75
+        elif "3.5-flash" in m:
+            in_rate, out_rate = 1.50, 9.00
+        elif "pro" in m:
+            in_rate, out_rate = 2.00, 12.00
+        elif "1.5-flash" in m:
+            in_rate, out_rate = 0.075, 0.30
+        else:
+            in_rate, out_rate = 0.30, 2.50
+        search_fee = (search_calls * 0.035) if search_calls > 0 else 0.0
+        cost = (input_tokens / 1_000_000 * in_rate) + (output_tokens / 1_000_000 * out_rate) + search_fee
+        return round(cost, 6)
+
+    if provider == "openai":
+        m = model.lower()
+        if "gpt-5.6-luna" in m:
+            in_rate, out_rate = 0.20, 1.20
+        elif "gpt-5.6-terra" in m:
+            in_rate, out_rate = 2.00, 12.00
+        elif "gpt-5.6" in m or "gpt-5.6-sol" in m:
+            in_rate, out_rate = 4.00, 20.00
+        elif "gpt-4o-mini" in m:
+            in_rate, out_rate = 0.15, 0.60
+        elif "gpt-4o" in m:
+            in_rate, out_rate = 2.50, 10.00
+        elif "o3-mini" in m or "o4-mini" in m:
+            in_rate, out_rate = 1.10, 4.40
+        elif "o3" in m or "o1" in m:
+            in_rate, out_rate = 15.00, 60.00
+        else:
+            in_rate, out_rate = 4.00, 20.00
+        search_fee = search_calls * 0.010
+        cost = (input_tokens / 1_000_000 * in_rate) + (output_tokens / 1_000_000 * out_rate) + search_fee
+        return round(cost, 6)
+
+    return 0.0
 
 
 def resolve_provider(settings: Settings) -> LLMProvider:
@@ -152,30 +251,30 @@ async def call_with_retry(
             attempt += 1
 
 
-async def generate_text(system_prompt: str, user_message: str, settings: Settings) -> str:
+async def generate_text(system_prompt: str, user_message: str, settings: Settings) -> LLMGenerationResult:
     """Generate report-writing text from the configured provider (no web search tool)."""
     provider = resolve_provider(settings)
     if provider == "perplexity":
-        text, _citations = await _call_perplexity(system_prompt, user_message, settings)
-        return text
+        text, _citations, usage = await _call_perplexity(system_prompt, user_message, settings)
+        return LLMGenerationResult(text, usage)
     if provider == "gemini":
-        text, _citations = await _call_gemini(system_prompt, user_message, settings, use_search=False)
-        return text
-    text, _citations = await _call_openai(system_prompt, user_message, settings, use_search=False)
-    return text
+        text, _citations, usage = await _call_gemini(system_prompt, user_message, settings, use_search=False)
+        return LLMGenerationResult(text, usage)
+    text, _citations, usage = await _call_openai(system_prompt, user_message, settings, use_search=False)
+    return LLMGenerationResult(text, usage)
 
 
 async def research_with_web_search(system_prompt: str, user_message: str, settings: Settings) -> ResearchResponse:
     """Run one live-web-search research call against the configured provider."""
     provider = resolve_provider(settings)
     if provider == "perplexity":
-        text, citations = await _call_perplexity(system_prompt, user_message, settings)
-        return ResearchResponse(text=text, citations=citations)
+        text, citations, usage = await _call_perplexity(system_prompt, user_message, settings)
+        return ResearchResponse(text=text, citations=citations, usage=usage)
     if provider == "gemini":
-        text, citations = await _call_gemini(system_prompt, user_message, settings, use_search=True)
-        return ResearchResponse(text=text, citations=citations)
-    text, citations = await _call_openai(system_prompt, user_message, settings, use_search=True)
-    return ResearchResponse(text=text, citations=citations)
+        text, citations, usage = await _call_gemini(system_prompt, user_message, settings, use_search=True)
+        return ResearchResponse(text=text, citations=citations, usage=usage)
+    text, citations, usage = await _call_openai(system_prompt, user_message, settings, use_search=True)
+    return ResearchResponse(text=text, citations=citations, usage=usage)
 
 
 # ---------------------------------------------------------------------------
@@ -205,8 +304,8 @@ def _extract_url_citations(annotated_blocks: list) -> list[ResearchCitation]:
 
 async def _call_perplexity(
     system_prompt: str, user_message: str, settings: Settings,
-) -> tuple[str, list[ResearchCitation]]:
-    """Call Perplexity's chat-completions endpoint. Returns (text, citations)."""
+) -> tuple[str, list[ResearchCitation], TokenUsage]:
+    """Call Perplexity's chat-completions endpoint. Returns (text, citations, usage)."""
     require_api_key("perplexity", settings.perplexity_api_key, "PERPLEXITY_API_KEY")
     client = AsyncOpenAI(api_key=settings.perplexity_api_key, base_url=_PERPLEXITY_BASE_URL)
 
@@ -229,7 +328,18 @@ async def _call_perplexity(
     text = response.choices[0].message.content if response and response.choices else ""
     citation_urls = getattr(response, "citations", None) or []
     citations = [ResearchCitation(url=url, title="") for url in citation_urls]
-    return require_nonempty_text(text, "perplexity"), citations
+
+    clean_text = require_nonempty_text(text, "perplexity")
+    usage_obj = getattr(response, "usage", None)
+    in_tok = getattr(usage_obj, "prompt_tokens", 0) or 0
+    out_tok = getattr(usage_obj, "completion_tokens", 0) or 0
+    if in_tok == 0 and out_tok == 0:
+        in_tok = max(1, len(system_prompt + user_message) // 4)
+        out_tok = max(1, len(clean_text) // 4)
+    tot_tok = getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok)
+    cost = calculate_cost_usd("perplexity", settings.perplexity_model, in_tok, out_tok)
+    usage = TokenUsage(input_tokens=in_tok, output_tokens=out_tok, total_tokens=tot_tok, estimated_cost_usd=cost)
+    return clean_text, citations, usage
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +349,8 @@ async def _call_perplexity(
 
 async def _call_gemini(
     system_prompt: str, user_message: str, settings: Settings, use_search: bool,
-) -> tuple[str, list[ResearchCitation]]:
-    """Call Gemini via the Interactions API. Returns (text, citations)."""
+) -> tuple[str, list[ResearchCitation], TokenUsage]:
+    """Call Gemini via the Interactions API. Returns (text, citations, usage)."""
     require_api_key("gemini", settings.gemini_api_key, "GEMINI_API_KEY")
     client = genai.Client(api_key=settings.gemini_api_key)
 
@@ -268,7 +378,18 @@ async def _call_gemini(
         for content_block in getattr(step, "content", None) or []
     ]
     citations = _extract_url_citations(model_output_blocks)
-    return require_nonempty_text(text, "gemini"), citations
+    clean_text = require_nonempty_text(text, "gemini")
+
+    usage_metadata = getattr(interaction, "usage_metadata", None) or getattr(interaction, "usage", None)
+    in_tok = getattr(usage_metadata, "prompt_token_count", 0) or getattr(usage_metadata, "input_token_count", 0) or 0
+    out_tok = getattr(usage_metadata, "candidates_token_count", 0) or getattr(usage_metadata, "output_token_count", 0) or 0
+    if in_tok == 0 and out_tok == 0:
+        in_tok = max(1, len(system_prompt + user_message) // 4)
+        out_tok = max(1, len(clean_text) // 4)
+    tot_tok = getattr(usage_metadata, "total_token_count", in_tok + out_tok) or (in_tok + out_tok)
+    cost = calculate_cost_usd("gemini", settings.gemini_model, in_tok, out_tok, search_calls=1 if use_search else 0)
+    usage = TokenUsage(input_tokens=in_tok, output_tokens=out_tok, total_tokens=tot_tok, estimated_cost_usd=cost)
+    return clean_text, citations, usage
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +399,8 @@ async def _call_gemini(
 
 async def _call_openai(
     system_prompt: str, user_message: str, settings: Settings, use_search: bool,
-) -> tuple[str, list[ResearchCitation]]:
-    """Call OpenAI's Responses API. Returns (text, citations)."""
+) -> tuple[str, list[ResearchCitation], TokenUsage]:
+    """Call OpenAI's Responses API. Returns (text, citations, usage)."""
     require_api_key("openai", settings.openai_api_key, "OPENAI_API_KEY")
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -312,4 +433,15 @@ async def _call_openai(
         for content_block in getattr(item, "content", None) or []
     ]
     citations = _extract_url_citations(message_blocks)
-    return require_nonempty_text(text, "openai"), citations
+    clean_text = require_nonempty_text(text, "openai")
+
+    usage_obj = getattr(response, "usage", None)
+    in_tok = getattr(usage_obj, "input_tokens", 0) or getattr(usage_obj, "prompt_tokens", 0) or 0
+    out_tok = getattr(usage_obj, "output_tokens", 0) or getattr(usage_obj, "completion_tokens", 0) or 0
+    if in_tok == 0 and out_tok == 0:
+        in_tok = max(1, len(system_prompt + user_message) // 4)
+        out_tok = max(1, len(clean_text) // 4)
+    tot_tok = getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok)
+    cost = calculate_cost_usd("openai", settings.openai_model, in_tok, out_tok, search_calls=1 if use_search else 0)
+    usage = TokenUsage(input_tokens=in_tok, output_tokens=out_tok, total_tokens=tot_tok, estimated_cost_usd=cost)
+    return clean_text, citations, usage

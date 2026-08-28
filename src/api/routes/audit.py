@@ -19,6 +19,7 @@ Endpoints:
 
 import json  # json.loads/dumps used to persist audit results as JSON
 import logging  # Standard logging — records every request start, completion, and error
+import time  # time.perf_counter measures full audit latency
 import uuid  # uuid.uuid4 generates one audit_id shared by the job record and the report
 from pathlib import Path  # Path used to read/write JSON files in the reports/ folder
 
@@ -97,6 +98,8 @@ async def start_audit(request: AuditRequest) -> AuditResult:
     normalized_url: str = validation.normalized_url  # e.g. "https://www.truelinesolution.com"
     logger.info("URL normalised: %r → %r", request.url, normalized_url)
 
+    start_time: float = time.perf_counter()
+
     # job_audit_id is generated once, here, and threaded into report generation so the
     # same ID identifies both the in-process job record and the finished report (the
     # pipelines below fall back to generating their own ID only if none is supplied,
@@ -124,6 +127,14 @@ async def start_audit(request: AuditRequest) -> AuditResult:
         report_result = await _generate_report_legacy_pipeline(normalized_url, prompt_context, job_audit_id)
 
         audit_id: str = report_result.audit_id  # Unique ID for this audit — used as filename
+        elapsed_seconds: float = (
+            report_result.elapsed_seconds
+            if getattr(report_result, "elapsed_seconds", 0.0) > 0
+            else round(time.perf_counter() - start_time, 2)
+        )
+        input_tokens: int = getattr(report_result, "input_tokens", 0)
+        output_tokens: int = getattr(report_result, "output_tokens", 0)
+        estimated_cost_usd: float = getattr(report_result, "estimated_cost_usd", 0.0)
 
         # --- Step 6: Persist the report JSON for later GET retrieval ----------
 
@@ -132,7 +143,10 @@ async def start_audit(request: AuditRequest) -> AuditResult:
             normalized_url=normalized_url,
             markdown_report=report_result.markdown_report,
             created_at=report_result.created_at.isoformat(),
-            # isoformat() converts the datetime to a JSON-serialisable string
+            elapsed_seconds=elapsed_seconds,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=estimated_cost_usd,
         )
 
         update_job(
@@ -147,10 +161,12 @@ async def start_audit(request: AuditRequest) -> AuditResult:
     # --- Step 7: Return the response to the UI ----------------------------
 
     logger.info(
-        "Audit complete: audit_id=%s, url=%s, report_length=%d chars",
+        "Audit complete: audit_id=%s, url=%s, report_length=%d chars, elapsed=%.2fs, cost=$%.4f",
         audit_id,
         normalized_url,
         len(report_result.markdown_report),
+        elapsed_seconds,
+        estimated_cost_usd,
     )
 
     return AuditResult(
@@ -158,6 +174,10 @@ async def start_audit(request: AuditRequest) -> AuditResult:
         url=normalized_url,                             # Normalised URL shown in the UI meta row
         markdown_report=report_result.markdown_report,  # Full Markdown for the UI preview
         created_at=report_result.created_at,            # Timestamp shown in the UI meta row
+        elapsed_seconds=elapsed_seconds,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        estimated_cost_usd=estimated_cost_usd,
     )
 
 
@@ -311,6 +331,10 @@ async def get_audit(audit_id: str) -> AuditResult:
         url=data["url"],
         markdown_report=data["markdown_report"],
         created_at=datetime.fromisoformat(data["created_at"]),  # Deserialise the ISO timestamp string
+        elapsed_seconds=data.get("elapsed_seconds", 0.0),
+        input_tokens=data.get("input_tokens", 0),
+        output_tokens=data.get("output_tokens", 0),
+        estimated_cost_usd=data.get("estimated_cost_usd", 0.0),
     )
 
 
@@ -328,6 +352,10 @@ def _save_report_json(
     normalized_url: str,
     markdown_report: str,
     created_at: str,
+    elapsed_seconds: float = 0.0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    estimated_cost_usd: float = 0.0,
 ) -> None:
     """
     Persist the audit result to a JSON file for later GET retrieval.
@@ -340,6 +368,10 @@ def _save_report_json(
         normalized_url: The audited URL.
         markdown_report: Full Markdown text of the report.
         created_at: ISO-format timestamp string.
+        elapsed_seconds: Total duration of the audit in seconds.
+        input_tokens: Prompt/context tokens used.
+        output_tokens: Completion tokens generated.
+        estimated_cost_usd: Estimated model cost in USD.
     """
     import os  # Local import — only needed in this helper
     os.makedirs(_settings.reports_dir, exist_ok=True)  # Ensure the directory exists
@@ -349,6 +381,10 @@ def _save_report_json(
         "url": normalized_url,
         "markdown_report": markdown_report,
         "created_at": created_at,
+        "elapsed_seconds": elapsed_seconds,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "estimated_cost_usd": estimated_cost_usd,
     }
 
     path = _report_json_path(audit_id)

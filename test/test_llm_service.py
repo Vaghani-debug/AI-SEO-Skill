@@ -19,14 +19,17 @@ from openai import APIConnectionError, APITimeoutError, AuthenticationError, Int
 
 from src.config import Settings
 from src.services.llm_service import (
+    LLMGenerationResult,
     LLMProviderError,
     ResearchCitation,
     ResearchResponse,
+    TokenUsage,
     _call_gemini,
     _call_openai,
     _call_perplexity,
     _extract_url_citations,
     _is_transient_openai_error,
+    calculate_cost_usd,
     call_with_retry,
     generate_text,
     require_api_key,
@@ -177,10 +180,14 @@ class TestCallPerplexity:
         )
         mock_async_openai.return_value = mock_client
 
-        text, citations = await _call_perplexity("system", "user", settings)
+        text, citations, usage = await _call_perplexity("system", "user", settings)
 
         assert text == "Report body"
         assert citations == [ResearchCitation(url="https://example.com/a", title="")]
+        assert isinstance(usage, TokenUsage)
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
+        assert usage.estimated_cost_usd > 0
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["model"] == settings.perplexity_model
         assert call_kwargs["messages"][0] == {"role": "system", "content": "system"}
@@ -205,10 +212,11 @@ class TestCallPerplexity:
         mock_client.chat.completions.create = AsyncMock(return_value=response_without_citations)
         mock_async_openai.return_value = mock_client
 
-        text, citations = await _call_perplexity("system", "user", settings)
+        text, citations, usage = await _call_perplexity("system", "user", settings)
 
         assert text == "Report body"
         assert citations == []
+        assert isinstance(usage, TokenUsage)
 
     @patch("src.services.llm_service.AsyncOpenAI")
     async def test_transient_failure_is_retried_then_succeeds(self, mock_async_openai, settings: Settings) -> None:
@@ -223,9 +231,10 @@ class TestCallPerplexity:
         mock_async_openai.return_value = mock_client
 
         with patch("src.services.llm_service.asyncio.sleep", AsyncMock()):
-            text, citations = await _call_perplexity("system", "user", settings)
+            text, citations, usage = await _call_perplexity("system", "user", settings)
 
         assert text == "Report body"
+        assert isinstance(usage, TokenUsage)
         assert mock_client.chat.completions.create.call_count == 2
 
 
@@ -255,10 +264,13 @@ class TestCallGemini:
         mock_client.interactions.create = MagicMock(return_value=_fake_gemini_interaction("Report body"))
         mock_client_cls.return_value = mock_client
 
-        text, citations = await _call_gemini("system", "user", settings, use_search=False)
+        text, citations, usage = await _call_gemini("system", "user", settings, use_search=False)
 
         assert text == "Report body"
         assert citations == []
+        assert isinstance(usage, TokenUsage)
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
         assert "tools" not in mock_client.interactions.create.call_args.kwargs
 
     @patch("src.services.llm_service.genai.Client")
@@ -271,10 +283,11 @@ class TestCallGemini:
         )
         mock_client_cls.return_value = mock_client
 
-        text, citations = await _call_gemini("system", "user", settings, use_search=True)
+        text, citations, usage = await _call_gemini("system", "user", settings, use_search=True)
 
         assert text == "Findings"
         assert citations == [citation]
+        assert isinstance(usage, TokenUsage)
         assert mock_client.interactions.create.call_args.kwargs["tools"] == [{"type": "google_search"}]
 
     @patch("src.services.llm_service.genai.Client")
@@ -314,10 +327,13 @@ class TestCallOpenAI:
         mock_client.responses.create = AsyncMock(return_value=_fake_openai_response("Report body"))
         mock_async_openai.return_value = mock_client
 
-        text, citations = await _call_openai("system", "user", settings, use_search=False)
+        text, citations, usage = await _call_openai("system", "user", settings, use_search=False)
 
         assert text == "Report body"
         assert citations == []
+        assert isinstance(usage, TokenUsage)
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
         call_kwargs = mock_client.responses.create.call_args.kwargs
         assert "tools" not in call_kwargs
         assert "tool_choice" not in call_kwargs
@@ -333,10 +349,11 @@ class TestCallOpenAI:
         )
         mock_async_openai.return_value = mock_client
 
-        text, citations = await _call_openai("system", "user", settings, use_search=True)
+        text, citations, usage = await _call_openai("system", "user", settings, use_search=True)
 
         assert text == "Findings"
         assert citations == [citation]
+        assert isinstance(usage, TokenUsage)
         call_kwargs = mock_client.responses.create.call_args.kwargs
         assert call_kwargs["tool_choice"] == "required"
         assert call_kwargs["tools"] == [{"type": "web_search", "search_context_size": "high"}]
@@ -365,9 +382,10 @@ class TestCallOpenAI:
         mock_async_openai.return_value = mock_client
 
         with patch("src.services.llm_service.asyncio.sleep", AsyncMock()):
-            text, citations = await _call_openai("system", "user", settings, use_search=False)
+            text, citations, usage = await _call_openai("system", "user", settings, use_search=False)
 
         assert text == "Report body"
+        assert isinstance(usage, TokenUsage)
         assert mock_client.responses.create.call_count == 2
 
 
@@ -390,33 +408,56 @@ class TestDispatch:
     @patch("src.services.llm_service._call_openai", new_callable=AsyncMock)
     async def test_generate_text_calls_openai_without_search(self, mock_call_openai, settings: Settings) -> None:
         settings.llm_provider = "openai"
-        mock_call_openai.return_value = ("Report body", [])
+        mock_call_openai.return_value = ("Report body", [], TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15, estimated_cost_usd=0.0001))
 
         text = await generate_text("system", "user", settings)
 
         assert text == "Report body"
+        assert isinstance(text, LLMGenerationResult)
+        assert text.usage.input_tokens == 10
         mock_call_openai.assert_awaited_once_with("system", "user", settings, use_search=False)
 
     @patch("src.services.llm_service._call_gemini", new_callable=AsyncMock)
     async def test_research_with_web_search_calls_gemini_with_search(self, mock_call_gemini, settings: Settings) -> None:
         settings.llm_provider = "gemini"
         citation = ResearchCitation(url="https://example.com/d", title="Example D")
-        mock_call_gemini.return_value = ("Findings", [citation])
+        usage = TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30, estimated_cost_usd=0.0002)
+        mock_call_gemini.return_value = ("Findings", [citation], usage)
 
         result = await research_with_web_search("system", "user", settings)
 
-        assert result == ResearchResponse(text="Findings", citations=[citation])
+        assert result == ResearchResponse(text="Findings", citations=[citation], usage=usage)
         mock_call_gemini.assert_awaited_once_with("system", "user", settings, use_search=True)
 
     @patch("src.services.llm_service._call_perplexity", new_callable=AsyncMock)
     async def test_research_with_web_search_calls_perplexity(self, mock_call_perplexity, settings: Settings) -> None:
         settings.llm_provider = "perplexity"
-        mock_call_perplexity.return_value = ("Findings", [])
+        usage = TokenUsage(input_tokens=15, output_tokens=8, total_tokens=23, estimated_cost_usd=0.0062)
+        mock_call_perplexity.return_value = ("Findings", [], usage)
 
         result = await research_with_web_search("system", "user", settings)
 
-        assert result == ResearchResponse(text="Findings", citations=[])
+        assert result == ResearchResponse(text="Findings", citations=[], usage=usage)
         mock_call_perplexity.assert_awaited_once_with("system", "user", settings)
+
+
+class TestCostCalculation:
+    """Unit tests for calculate_cost_usd."""
+
+    def test_perplexity_cost_calculation(self) -> None:
+        cost = calculate_cost_usd("perplexity", "sonar-pro", 1_000_000, 1_000_000)
+        # $3 in + $15 out + $0.006 req fee = $18.006
+        assert round(cost, 3) == 18.006
+
+    def test_gemini_cost_calculation(self) -> None:
+        cost = calculate_cost_usd("gemini", "gemini-2.5-flash", 1_000_000, 1_000_000)
+        # $0.30 in + $2.50 out = $2.80
+        assert round(cost, 2) == 2.80
+
+    def test_openai_cost_calculation(self) -> None:
+        cost = calculate_cost_usd("openai", "gpt-5.6", 1_000_000, 1_000_000)
+        # $4.00 in + $20.00 out = $24.00
+        assert round(cost, 2) == 24.00
 
 
 # ---------------------------------------------------------------------------

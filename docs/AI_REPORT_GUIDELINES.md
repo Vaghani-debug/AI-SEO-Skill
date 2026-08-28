@@ -173,27 +173,27 @@ Write for humans first.
 
 Use:
 
-Short paragraphs
+Zero prose paragraphs (no narrative blocks)
 
-Bullet lists
+Concise bullet lists with minimum words
 
 Simple explanations
 
 Avoid unnecessary jargon.
 
 When technical terminology is required,
-explain it.
+explain it concisely in a bullet point.
 
 Example
 
 Bad
 
-Canonicalization problem detected.
+Canonicalization problem detected on multiple pages across the site. Multiple pages appear to represent the same content. Adding a canonical tag tells search engines which page should be treated as the primary version.
 
 Good
 
-Multiple pages appear to represent the same content.
-Adding a canonical tag tells search engines which page should be treated as the primary version.
+- Multiple pages share identical content without canonical tags
+- Add self-referential or target canonical link tags to establish primary URL
 
 ---
 

@@ -56,7 +56,7 @@ homepage was fetched:
 - Use the sitemap <loc> URLs for the URL column in all page inventory tables.
 - For the homepage row, use the verified title, description, H1, and links from the evidence.
 - For the Title Tag column: use the verified <title> text when the page was fetched individually; otherwise write a plausible, on-brand title consistent with the site's existing title-tag pattern and the page's target keyword — never leave it blank or write a placeholder.
-- For all rows' SEO Notes: always write three URL-specific improvement bullets formatted as an HTML bullet list (see Bullet-Point Cell Formatting section) regardless of whether the page was fetched individually.
+- For all rows' SEO Notes: always write two URL-specific improvement bullets formatted as an HTML bullet list (see Bullet-Point Cell Formatting section) regardless of whether the page was fetched individually.
 - Audit coverage limits belong in narrative sections only, never in table cells.
 
 ---
@@ -134,12 +134,23 @@ Avoid filler text.
 
 ---
 
+# Strict No-Paragraph Rule (Bullet Points Only)
+
+ABSOLUTELY NO PROSE PARAGRAPHS ANYWHERE IN THE REPORT.
+
+- Never write narrative paragraphs, summary paragraphs, introductory sentences, or concluding prose blocks.
+- If a section or subsection does NOT contain a table, present ALL findings, explanations, and recommendations strictly as concise bullet points (`- ...`).
+- Use as few words as possible per bullet point. Keep bullets direct, punchy, and factual.
+- If a section contains a table, place only the table under the heading (no introductory or concluding paragraphs).
+
+---
+
 # Core Web Vitals & Page Speed (Section 2.4)
 
 The evidence for this section states either real PageSpeed Insights data (performance score, LCP, CLS, INP, and whether it is field or lab data) or that no such data was collected for this audit.
 
-- If real data is present in the evidence, report the exact values and their data source (field vs. lab) — these are verified measurements, not estimates, so state them as facts.
-- If the evidence states no Core Web Vitals / PageSpeed data was collected, write that plainly (e.g. "Core Web Vitals data was not available for this audit.") — never invent a score, LCP, CLS, or INP value that is not present in the evidence.
+- If real data is present in the evidence, report the exact values and their data source (field vs. lab) as concise bullet points — these are verified measurements, not estimates, so state them as facts.
+- If the evidence states no Core Web Vitals / PageSpeed data was collected, write that plainly as a single bullet point (e.g. "- Core Web Vitals data was not available for this audit.") — never invent a score, LCP, CLS, or INP value that is not present in the evidence.
 - Only report metrics that appear in the evidence. Do not estimate or infer a metric that is missing (e.g. INP is often absent from lab-only data — omit it rather than guessing).
 
 ---
@@ -197,13 +208,13 @@ Every SEO Notes, Recommendation, and Business Impact cell MUST always contain re
 
 MANDATORY: Markdown table cells cannot contain raw newlines or Markdown "- " bullet syntax (both break table parsing). Any cell that lists more than one point MUST use an inline HTML bullet list instead: <ul><li>...</li><li>...</li></ul>. Never use <br> to separate multiple points.
 
-For SEO Notes cells specifically, write exactly three short improvement bullets specific to that page's URL and content type, each as its own <li>.
+For SEO Notes cells specifically, write exactly two short improvement bullets specific to that page's URL and content type, each as its own <li>.
 Do NOT include label headings like "SEO Strategy:" or "Action Items:" — just the improvement itself:
 
-<ul><li>[specific keyword or content improvement for this URL]</li><li>[technical or structural SEO improvement]</li><li>[link-building or conversion improvement]</li></ul>
+<ul><li>[specific keyword or content improvement for this URL]</li><li>[technical or structural SEO improvement]</li></ul>
 
 Example for /hair-transplant-in-bangalore:
-<ul><li>Target "hair transplant Bangalore" and nearby-area keyword variants</li><li>Add FAQ schema for common pre-treatment questions</li><li>Build internal links from the homepage and /services to this page</li></ul>
+<ul><li>Target "hair transplant Bangalore" and nearby-area keyword variants</li><li>Add FAQ schema for common pre-treatment questions</li></ul>
 
 The phrase "Could not be verified in this audit." must NEVER appear in any table cell.
 
@@ -226,10 +237,10 @@ SECTION 1 (Keyword Opportunity Strategy) and SECTION 2 (Competitor Analysis) rel
 
 SECTION 3 must contain either 3.2 or 3.3, never both filled in, and never both empty:
 
-- If the business evidence indicates a local or service-area business (physical location, city/region references, "near me" style services), complete section 3.2 (Local Location Opportunities) with a bounded table of realistic nearby cities/regions, and write "Not applicable — business is not location-based." under 3.3.
+- If the business evidence indicates a local, regional, or service-area business (physical location, city/region references, "near me" services) or multi-location expansion opportunities, complete section 3.2 (Local Location Opportunities) with the City-Wise Keyword Volume & Competition Table containing 15-25 target cities/regions, their primary keywords, estimated search volumes, competition levels (Low/Medium/High), priority metrics (High/Medium/Low), source, and retrieved date. Write "Not applicable — business is not location-based." under 3.3.
 - If the business is not location-based (e-commerce, SaaS, national/global content site), complete section 3.3 (Audience & Market Expansion Opportunities) with realistic audience segments or market verticals, and write "Not applicable — business does not target specific locations." under 3.2.
 - Always complete 3.1 (Applicability Assessment) first, explaining which path was chosen and why, based on evidence from the crawl (address/NAP data, service-area language, business type).
-- Never generate more than 8 rows in the Location Opportunity Table. Quality and relevance over quantity.
+- For section 3.2, populate at least 15 to 25 target cities with comprehensive keyword volume, competition levels, and priority metrics.
 
 ---
 
@@ -302,11 +313,13 @@ Before returning the report, verify that:
 
 ✓ Markdown formatting remains valid.
 
+✓ Zero paragraphs: No prose paragraphs anywhere in the report. All content in sections without tables is formatted strictly as concise bullet points with minimum words.
+
 ✓ The phrase "Not Detected" does not appear anywhere in the report.
 
 ✓ The phrase "Could not be verified in this audit." does not appear in any table cell.
 
-✓ Every SEO Notes cell contains three URL-specific improvement bullets formatted as an HTML <ul><li> list, never <br>-separated, with no bold label headings.
+✓ Every SEO Notes cell contains two URL-specific improvement bullets formatted as an HTML <ul><li> list, never <br>-separated, with no bold label headings.
 
 ✓ Every numeric claim in SECTIONS 1, 2, and 3 has a non-empty Source and Retrieved value and is phrased as an estimate.
 

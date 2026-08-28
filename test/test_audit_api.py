@@ -202,6 +202,20 @@ class TestStartAuditSuccess:
         json_file = tmp_path / "reports" / f"{audit_id}.json"
         assert json_file.exists()  # Persisted for GET retrieval
 
+    def test_response_contains_audit_metrics(self, client: TestClient, tmp_path: Path) -> None:
+        """The response contains elapsed seconds, token counts, and cost estimate."""
+        with _patch_full_pipeline(tmp_path):
+            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
+        data = response.json()
+        assert "elapsed_seconds" in data
+        assert "input_tokens" in data
+        assert "output_tokens" in data
+        assert "estimated_cost_usd" in data
+        assert isinstance(data["elapsed_seconds"], (int, float))
+        assert isinstance(data["input_tokens"], int)
+        assert isinstance(data["output_tokens"], int)
+        assert isinstance(data["estimated_cost_usd"], (int, float))
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/audits/ — validation error cases
