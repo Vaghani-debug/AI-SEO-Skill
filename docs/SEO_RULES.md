@@ -106,44 +106,89 @@ Every issue should be assigned one severity level.
 | Severity | Meaning |
 | -------- | ------- |
 | **Critical** | Prevents crawling, indexing, or major SEO functionality |
-| **High** | Strongly impacts rankings or user experience |
-| **Medium** | Should be improved but not urgent |
-| **Low** | Best practice or optimization opportunity |
-| **Info** | Informational only |
+| **High** | Strongly impacts rankings, visibility, or user experience |
+| **Medium** | Meaningful improvement opportunity, not immediately blocking |
+| **Low** | Best practice or minor optimization opportunity |
+| **Informational** | Informational context or verified healthy status |
+
+---
+
+## Finding & Recommendation Statuses
+
+Every audit check and finding must have an explicit status:
+
+| Status | Meaning |
+| ------ | ------- |
+| **Pass** | Verified to meet the SEO standard or best practice |
+| **Issue** | Verified defect or sub-optimal configuration requiring fix |
+| **Opportunity** | Potential expansion or strategic optimization area |
+| **Unverified** | Could not be measured or verified from available audit evidence |
+| **Not applicable** | Check does not apply to this site type or page configuration |
+
+---
+
+## Evidence Provenance Tiers
+
+Every finding and claim must trace to a verified provenance tier:
+
+| Provenance Tier | Description |
+| --------------- | ----------- |
+| `measured` | Directly measured from crawler, DOM inspection, or technical fetch |
+| `researched` | Provider-returned search citations with verified source URLs |
+| `derived` | Deterministically calculated from measured inputs (e.g., ratios, counts) |
+| `consultant_assessment` | Bounded LLM qualitative evaluation based strictly on evidence |
+| `client_input_required` | Requires client/owner confirmation (e.g., target market, CMS) |
+| `integration_required` | Requires third-party authenticated API (e.g., GSC, GA4, backlink API) |
 
 ---
 
 ## Every Issue Must Include
 
-Instead of simply reporting `Missing Meta Description`, every issue must contain the following fields:
+Instead of simply reporting `Missing Meta Description`, every recommendation must contain the standard fields:
 
-| Field | Example |
-| ----- | ------- |
-| **Issue** | Missing Meta Description |
-| **Severity** | High |
-| **Business Impact** | Reduced click-through rate from search results |
-| **Why It Matters** | Search engines may generate less compelling snippets |
-| **Recommendation** | Add a unique 150–160 character meta description |
-| **Estimated Effort** | 5–10 minutes |
-| **Priority** | 2 |
-
-> This structured format is one of the biggest improvements over traditional SEO reports.
+| Field | Description | Example |
+| ----- | ----------- | ------- |
+| **Finding ID** | Unique identifier for tracking | `TECH-META-001` |
+| **Category** | SEO category | `On-Page SEO` |
+| **Affected URLs** | List of specific URLs | `https://example.com/services` |
+| **Status** | Current state | `Issue` |
+| **Evidence** | Measurable observation | `Meta description tag is absent in static HTML` |
+| **Severity** | Impact severity | `High` |
+| **Business Impact** | Impact on traffic/CTR/visibility | `Reduced click-through rate from search results` |
+| **Why It Matters** | SEO reason | `Search engines generate automated or truncated snippets` |
+| **Recommended Action** | Specific fix instructions | `Add a unique 150–160 character meta description with primary keyword` |
+| **Priority** | Execution priority (1-5) | `2` |
+| **Effort** | Implementation effort | `Easy` |
+| **Estimated Time** | Time to implement | `10 minutes` |
+| **Suggested Owner** | Responsible role | `Content Writer` |
+| **Dependencies** | Pre-requisites | `Target keyword finalized` |
+| **Validation Method** | How to verify after fix | `Inspect HTML <meta name="description"> and rerun audit` |
+| **KPI** | Target metric | `Search snippet CTR` |
+| **Provenance** | Data source tier | `measured` |
 
 ---
 
-## SEO Score
+## SEO Scoring Engine & Category Weights
 
-Each audit produces an **Overall SEO Score** from **0–100**, broken into weighted categories.
+Each audit calculates a deterministic **Overall SEO Score** from **0–100** based only on verified evidence.
 
-| Category | Weight |
-| -------- | ------ |
-| Technical SEO | 40% |
-| On-Page SEO | 30% |
-| Content Quality | 20% |
-| User Experience | 10% |
+### Category Weights
 
-**Why this weighting?**
-Fixing technical issues before content is generally more impactful — if search engines cannot properly crawl or index the site, content improvements have limited effect.
+| Category | Weight | Scope |
+| -------- | ------ | ----- |
+| **Technical SEO** | 40% | Crawlability, indexability, robots, sitemap, canonical, HTTPS, redirects, errors |
+| **On-Page SEO** | 30% | Title tags, meta descriptions, headings, URL structure, image alt tags |
+| **Content Quality** | 20% | Content depth, E-E-A-T signals, duplicate content, search intent alignment |
+| **User Experience & Performance** | 10% | Mobile responsiveness, security headers, Core Web Vitals (when available) |
+| **Total** | **100%** | Full Score |
+
+### Scoring Principles
+
+1. **Deterministic Only**: Scores are calculated using transparent, deterministic rules. Subjective LLM opinions never alter scores.
+2. **Evidence Coverage Ratio**: The report displays both the numeric score and the **Evidence Coverage Ratio** (percentage of applicable audit checks verified).
+3. **No Phantom Points**: Unverified checks (e.g., missing API integrations or unmeasured CWV) are never scored as 100% or 0% — they are omitted from the denominator or reported with explicit coverage limitations.
+4. **Proportional Per-Page Deductions**: Per-page checks scale deductions proportionally to the fraction of audited pages affected.
+5. **Non-Applicable Rules Excluded**: Rules marked `Not applicable` (such as local schema for a pure SaaS site) are excluded from scoring denominators.
 
 ---
 

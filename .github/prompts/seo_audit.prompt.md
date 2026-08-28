@@ -55,7 +55,7 @@ homepage was fetched:
 - Derive the Page Name from the URL slug (e.g. /services/hair-transplant/ → Hair Transplant).
 - Use the sitemap <loc> URLs for the URL column in all page inventory tables.
 - For the homepage row, use the verified title, description, H1, and links from the evidence.
-- For the Title Tag column: use the verified <title> text when the page was fetched individually; otherwise write a plausible, on-brand title consistent with the site's existing title-tag pattern and the page's target keyword — never leave it blank or write a placeholder.
+- For the Title Tag column: use the verified <title> text when the page was fetched and extracted; if the page was not fetched in this crawl sample, provide the target/recommended title tag clearly aligned with the page's URL topic and target keyword — never leave it blank or write a raw placeholder.
 - For all rows' SEO Notes: always write two URL-specific improvement bullets formatted as an HTML bullet list (see Bullet-Point Cell Formatting section) regardless of whether the page was fetched individually.
 - Audit coverage limits belong in narrative sections only, never in table cells.
 
@@ -251,6 +251,14 @@ SECTION 3 must contain either 3.2 or 3.3, never both filled in, and never both e
 
 ---
 
+# Site-Type Strategy, Roadmap & Measurement Sections (SECTIONS 6-8)
+
+- SECTION 6 (Site-Type Strategy): 6.1 must state one clear applicable business model (e.g. local service, e-commerce, SaaS, publisher/content, marketplace) based only on evidence already gathered elsewhere in the audit — never introduce a new, previously unverified business fact. 6.2 must tailor recommendations to that specific model and must not merely repeat generic advice already covered in SECTIONS 2-5.
+- SECTION 7 (Prioritized 90-Day Implementation Roadmap): every row in 7.4's Action Plan Table must reference a finding, issue, or recommendation already stated elsewhere in the report — never introduce a brand-new recommendation here. 7.1-7.3 group those same items into Days 1-30 / 31-60 / 61-90 bullet lists. Effort must be Low/Medium/High, never a fabricated hour/cost estimate. Target KPI must describe the metric qualitatively unless a verified figure already exists in the report.
+- SECTION 8 (Measurement & Source Register): 8.1's Baseline column may only contain a figure already verified elsewhere in this report, or the phrase "Not yet measured — establish via [tool]"; never fabricate a baseline number. 8.2 must recommend only real, commonly available tools/consoles relevant to the site's evidence (e.g. Google Search Console, Google Analytics, Google Business Profile). 8.3 (Source Register) must list only Source/Retrieved citations already used earlier in the report (SECTIONS 1-3) — never invent a new source here.
+
+---
+
 # Placeholder Population
 
 Replace placeholders only when verified evidence exists.
@@ -328,6 +336,10 @@ Before returning the report, verify that:
 ✓ No mention of Perplexity, Comet browser, ChatGPT, Google Docs, or any AI-tool branding, chat transcript text, or references to prior conversations/attachments appears anywhere.
 
 ✓ Section 2.4 either states the real Core Web Vitals/PageSpeed values from the evidence or clearly states that no data was collected — never a fabricated number.
+
+✓ SECTION 7's Action Plan Table only references findings/recommendations already stated elsewhere in the report — no newly-invented action items.
+
+✓ SECTION 8's KPI baselines and Source Register cite only verified figures/sources already used earlier in the report — no fabricated numbers or new sources.
 
 ---
 

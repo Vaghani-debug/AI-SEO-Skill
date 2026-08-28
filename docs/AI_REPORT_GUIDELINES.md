@@ -227,126 +227,91 @@ Discuss trade-offs.
 
 The AI must never:
 
-Invent metadata.
+- Invent metadata for uncrawled pages.
+- Invent broken links or status codes.
+- Invent schema markup.
+- Invent page speed scores or Core Web Vitals.
+- Invent keyword rankings or traffic figures.
+- Invent backlinks or domain authority scores.
+- Invent competitors or competitor URLs.
 
-Invent broken links.
-
-Invent schema.
-
-Invent page speed scores.
-
-Invent Core Web Vitals.
-
-Invent keyword rankings.
-
-Invent backlinks.
-
-Invent competitors.
-
-If information is unavailable,
-state that it could not be verified.
+If information is unverified, state its status as `Unverified` or `Could not be verified in this audit.`
 
 ---
 
-# 9. Recommendation Structure
+# 9. Evidence Provenance & Transparency
 
-Every recommendation should follow this structure.
+Every finding and strategic recommendation must carry an explicit provenance classification:
 
-Issue
-
-↓
-
-Business Impact
-
-↓
-
-Why It Matters
-
-↓
-
-Recommended Fix
-
-↓
-
-Implementation Difficulty
-
-↓
-
-Estimated Time
-
-↓
-
-Expected SEO Benefit
+- `measured`: Directly observed in crawl or DOM extraction.
+- `researched`: Returned with a verified source citation by live web search.
+- `derived`: Computed deterministically from verified measurements.
+- `consultant_assessment`: Expert qualitative assessment grounded strictly in evidence.
+- `client_input_required`: Strategic context requiring client verification.
+- `integration_required`: Technical signal requiring authenticated tooling (GSC, GA4, backlink API).
 
 ---
 
-Example
+# 10. Universal Recommendation Structure
 
-Issue
+Every recommendation must include the standard fields:
 
-Missing Meta Description
-
-Business Impact
-
-Lower click-through rate from search results.
-
-Why It Matters
-
-Search engines may generate less compelling snippets.
-
-Recommended Fix
-
-Write a unique meta description between
-150 and 160 characters.
-
-Difficulty
-
-Easy
-
-Estimated Time
-
-5 minutes
-
-Expected Benefit
-
-Improved click-through rate.
+1. **Finding ID** (e.g. `TECH-CANONICAL-001`)
+2. **Category** (`Technical SEO`, `On-Page SEO`, `Content Quality`, `UX & Performance`, `Strategy`)
+3. **Affected URLs** (exact URL paths)
+4. **Current Status** (`Pass`, `Issue`, `Opportunity`, `Unverified`, `Not applicable`)
+5. **Evidence** (exact measurable observation)
+6. **Severity** (`Critical`, `High`, `Medium`, `Low`, `Informational`)
+7. **Business Impact** (revenue, traffic, CTR, user trust impact)
+8. **Why It Matters** (clear technical explanation of search engine behavior)
+9. **Recommended Action** (step-by-step actionable remediation)
+10. **Priority** (`1` to `5`)
+11. **Implementation Difficulty / Effort** (`Easy`, `Medium`, `Hard`)
+12. **Estimated Time** (e.g., `15 minutes`, `2 hours`, `1 day`)
+13. **Suggested Owner** (`Developer`, `Content Writer`, `SEO Specialist`, `Site Owner`, `DevOps`)
+14. **Dependencies** (prerequisites or blockers)
+15. **Validation Method** (how to verify after resolution)
+16. **KPI & Expected SEO Benefit** (target metric and expected outcome)
+17. **Provenance** (`measured`, `researched`, `derived`, `consultant_assessment`, etc.)
 
 ---
 
-# 10. Severity Language
+# 11. Severity Language
 
 Critical
 
-Requires immediate attention.
+Requires immediate attention. Blocks crawling, indexing, or core visibility.
 
 High
 
-Should be resolved as soon as possible.
+Strongly impacts search rankings, snippet CTR, or critical user experience.
 
 Medium
 
-Recommended improvement.
+Meaningful optimization opportunity. Should be scheduled in near-term work.
 
 Low
 
-Best practice optimisation.
+Best practice enhancement or minor technical polish.
 
-Information
+Informational
 
-No action required.
+Contextual observation or confirmation of verified healthy implementation.
 
 Never exaggerate severity.
 
-Never label everything as Critical.
+Never label every finding as Critical.
 
 ---
 
-# 11. Top Priorities
+# 12. Top Priorities
 
-After every audit,
-AI should identify:
+After every audit, AI should identify:
 
-Top 3 priorities
+- Top 3 critical fixes
+- Top 5 high-impact improvements
+- Quick wins (low effort, high impact)
+- Long-term strategic opportunities
 
 Top 5 priorities
 

@@ -361,14 +361,14 @@ class TestRealFileContent:
         content_lower = result.ai_guidelines.lower()
         assert "critical" in content_lower or "severity" in content_lower
 
-    def test_master_report_structure_ends_at_section_five(self) -> None:
-        """The canonical report must exclude the removed Sections 6-8."""
+    def test_master_report_structure_includes_sections_one_through_eight(self) -> None:
+        """The canonical report now spans SECTION 1 through SECTION 8 (6-8 reinstated)."""
         result = load_prompt_context()
         content = result.master_report_structure.lower()
         assert "section 5: off-page seo & geo strategy" in content
-        assert "section 6:" not in content
-        assert "section 7:" not in content
-        assert "section 8:" not in content
+        assert "section 6: site-type strategy" in content
+        assert "section 7: prioritized 90-day implementation roadmap" in content
+        assert "section 8: measurement & source register" in content
 
 
 # ---------------------------------------------------------------------------
