@@ -181,10 +181,13 @@
            - hidden initially; app.js removes the hidden class when the report is ready -->
 
       <div class="report-header">
-        <!-- report-header: row containing the report title -->
+        <!-- report-header: row containing the report title and the PDF download action -->
 
         <h2 class="report-title">SEO Audit Report</h2>
         <!-- report-title: section heading for the generated report -->
+
+        <a id="download-pdf-btn" class="btn btn-success" href="#" download>Download PDF</a>
+        <!-- download-pdf-btn: href is set by app.js to /api/v1/audits/{audit_id}/pdf once a report is rendered -->
 
       </div>
       <!-- end report-header -->

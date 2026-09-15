@@ -461,6 +461,68 @@ class TestGetAudit:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/audits/{audit_id}/pdf — PDF export
+# ---------------------------------------------------------------------------
+
+class TestGetAuditPdf:
+    """Tests for the PDF download endpoint."""
+
+    def test_known_id_returns_200(self, client: TestClient, tmp_path: Path) -> None:
+        """A valid audit_id with a persisted JSON file returns HTTP 200."""
+        audit_id = "pdf-known-id"
+        _mock_json_path(tmp_path, audit_id)
+        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
+            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
+        assert response.status_code == 200
+
+    def test_response_content_type_is_pdf(self, client: TestClient, tmp_path: Path) -> None:
+        """The response Content-Type header identifies the body as a PDF file."""
+        audit_id = "pdf-content-type"
+        _mock_json_path(tmp_path, audit_id)
+        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
+            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
+        assert response.headers["content-type"] == "application/pdf"
+
+    def test_response_has_attachment_content_disposition(self, client: TestClient, tmp_path: Path) -> None:
+        """The response includes a Content-Disposition header that triggers a browser download."""
+        audit_id = "pdf-disposition"
+        _mock_json_path(tmp_path, audit_id)
+        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
+            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
+        disposition = response.headers["content-disposition"]
+        assert "attachment" in disposition
+        assert audit_id in disposition
+
+    def test_response_body_is_a_valid_pdf(self, client: TestClient, tmp_path: Path) -> None:
+        """The response body starts with the PDF file signature."""
+        audit_id = "pdf-valid-body"
+        _mock_json_path(tmp_path, audit_id)
+        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
+            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
+        assert response.content.startswith(b"%PDF-")
+
+    def test_unknown_id_returns_404(self, client: TestClient, tmp_path: Path) -> None:
+        """An audit_id with no persisted file returns 404 Not Found."""
+        with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
+            response = client.get("/api/v1/audits/does-not-exist/pdf")
+        assert response.status_code == 404
+
+    def test_rendering_failure_returns_500(self, client: TestClient, tmp_path: Path) -> None:
+        """A PDF rendering exception results in a 500 with a user-friendly message."""
+        audit_id = "pdf-render-error"
+        _mock_json_path(tmp_path, audit_id)
+        with (
+            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
+            patch("src.api.routes.audit.render_report_pdf", side_effect=RuntimeError("boom")),
+        ):
+            response = client.get(f"/api/v1/audits/{audit_id}/pdf")
+        assert response.status_code == 500
+        detail = response.json().get("detail", "")
+        assert "Traceback" not in detail
+        assert "boom" not in detail  # Internal exception text is not leaked to the client
+
+
+# ---------------------------------------------------------------------------
 # GET /health — liveness check
 # ---------------------------------------------------------------------------
 

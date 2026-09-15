@@ -337,11 +337,17 @@ body {
 
 .report-body table {
   width: 100%; /* Full-width tables */
-  table-layout: auto; /* Natural column sizing based on content */
+  table-layout: fixed; /* Predictable, evidence-driven column widths — prevents one long unbroken value from stretching its column (and squeezing its neighbours) */
   border-collapse: collapse; /* Remove gaps between table cells */
   margin: 1.25rem 0; /* Vertical space around tables */
   font-size: 0.875rem; /* Readable font size for complex data tables */
   line-height: 1.5;
+}
+
+.report-body th,
+.report-body td {
+  overflow-wrap: break-word; /* Always wrap instead of overflowing the fixed column width */
+  word-break: normal;
 }
 
 .report-body th {
@@ -361,35 +367,37 @@ body {
   color: #2d3748;
 }
 
-/* Index / numerical identifier columns: shrink to fit tight content */
+/* Index / numerical identifier columns: always short, safe to keep on one line */
 .report-body th.col-index,
 .report-body td.col-index {
-  width: 1%;
+  width: 2.75rem;
   white-space: nowrap;
   text-align: center;
   font-weight: 600;
   color: #4a5568;
 }
 
-/* Short metadata / date / status columns: compact, no awkward wrapping */
+/* Short enum/status/date columns: narrow but still wraps if a value runs long,
+   so this column can never force the table to stretch or squeeze others */
 .report-body th.col-compact,
 .report-body td.col-compact {
-  width: 1%;
-  white-space: nowrap;
+  width: 7.5rem;
 }
 
 /* URL and technical link columns: wrap cleanly without stretching column */
 .report-body th.col-url,
 .report-body td.col-url {
-  max-width: 240px;
+  width: 13rem;
   word-break: break-all;
   overflow-wrap: anywhere;
 }
 
-/* Heavily populated content, notes, and recommendation columns: expand to fill available space */
+/* Heavily populated content, notes, and recommendation columns — and every
+   other column not otherwise classified — expand to fill the remaining
+   width evenly so long content always has room to wrap onto few lines
+   rather than being squeezed narrow by unrelated compact columns */
 .report-body th.col-expand,
 .report-body td.col-expand {
-  min-width: 220px;
   width: auto;
   word-break: break-word;
   overflow-wrap: break-word;

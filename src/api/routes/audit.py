@@ -24,6 +24,7 @@ import uuid  # uuid.uuid4 generates one audit_id shared by the job record and th
 from pathlib import Path  # Path used to read/write JSON files in the reports/ folder
 
 from fastapi import APIRouter, HTTPException, status  # Router, HTTP error helper, status codes
+from fastapi.responses import Response  # Response returns raw PDF bytes with a download header
 
 from src.api.models import AuditError, AuditRequest, AuditResult, AuditStatusResult  # Pydantic request/response models
 from src.config import get_settings  # Application settings — API key, model name, reports dir
@@ -31,6 +32,7 @@ from src.services.audit_job_service import create_job, get_job, update_job  # In
 from src.services.audit_models import AuditJobStatus  # Job lifecycle enum
 from src.services.extractor_service import extract  # Extracts verified SEO data from fetched HTML
 from src.services.fetch_service import fetch_site  # Fetches homepage, robots.txt, and sitemaps
+from src.services.pdf_service import render_report_pdf  # Renders a stored Markdown report into a PDF
 from src.services.prompt_loader import PromptContext, load_prompt_context  # Loads guidance files from disk
 from src.services.report_service import ReportResult, generate_report  # Report generation
 from src.services.url_service import normalize_and_validate  # Normalises and validates the input URL
@@ -335,6 +337,59 @@ async def get_audit(audit_id: str) -> AuditResult:
         input_tokens=data.get("input_tokens", 0),
         output_tokens=data.get("output_tokens", 0),
         estimated_cost_usd=data.get("estimated_cost_usd", 0.0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/audits/{audit_id}/pdf
+# Render and download a completed audit report as a PDF file.
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{audit_id}/pdf",
+    status_code=status.HTTP_200_OK,
+    summary="Download an audit report as PDF",
+    description="Renders the stored Markdown report for the given audit ID into a downloadable PDF file.",
+    responses={
+        404: {"model": AuditError, "description": "Audit not found"},
+        500: {"model": AuditError, "description": "PDF rendering failed"},
+    },
+)
+async def get_audit_pdf(audit_id: str) -> Response:
+    """
+    Render and download a completed audit report as a PDF file.
+
+    Reads the same persisted JSON used by GET /{audit_id} and renders its
+    Markdown report into a PDF on demand via pdf_service — no separate PDF
+    file is stored on disk, so the download always reflects the latest
+    persisted report content.
+    """
+    logger.info("PDF export requested for audit ID: %s", audit_id)
+
+    data = _load_report_json(audit_id)
+    if data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Audit not found: {audit_id}. Run a new audit to generate a report.",
+        )
+
+    try:
+        pdf_bytes = render_report_pdf(
+            markdown_report=data["markdown_report"],
+            url=data["url"],
+            audit_id=audit_id,
+        )
+    except Exception as render_error:
+        logger.error("PDF rendering failed for %s: %s", audit_id, render_error)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not generate the PDF report. Please try again.",
+        )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="seo-audit-{audit_id}.pdf"'},
     )
 
 

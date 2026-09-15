@@ -31,6 +31,7 @@ const reportSection  = document.getElementById("report-section");  // White card
 const reportMeta     = document.getElementById("report-meta");     // Small text showing URL and audit time
 const reportBody     = document.getElementById("report-body");     // Article element where Markdown is rendered
 const auditBtn       = document.getElementById("audit-btn");       // The "Audit" button
+const downloadPdfBtn = document.getElementById("download-pdf-btn"); // Anchor that downloads the PDF report
 
 const metricElapsed      = document.getElementById("metric-elapsed");       // Elapsed seconds badge
 const metricCost         = document.getElementById("metric-cost");          // Incurred cost badge
@@ -237,6 +238,11 @@ function renderReport(data) {
   formatReportTables(reportBody);
   // Auto-size table columns and wrap tables in responsive scroll containers
 
+  if (downloadPdfBtn && data.audit_id) {
+    downloadPdfBtn.href = `/api/v1/audits/${encodeURIComponent(data.audit_id)}/pdf`;
+    // Point the download link at this audit's PDF export endpoint
+  }
+
   hideSection(loadingSection);
   // Hide the spinner now that the report is ready
 
@@ -253,6 +259,59 @@ function renderReport(data) {
 // ---------------------------------------------------------------------------
 // Identifies column types by header text and applies sizing classes.
 
+// Headers whose values are always short, single-token-like (numbers, enums,
+// dates) — safe to give a narrow, non-wrapping column.
+const _COL_INDEX_HEADERS = new Set(["#", "#index", "# index", "index", "no."]);
+
+// Headers whose values are short but may occasionally wrap onto a second
+// line (severity/status/enum labels, short counts, dates) — narrow but NOT
+// forced onto a single line, so a slightly longer-than-expected value never
+// forces the column (and therefore the whole table) to balloon in width.
+const _COL_COMPACT_HEADERS = new Set([
+  "priority", "priority rank", "severity", "effort", "phase", "category",
+  "status", "http status", "current status", "current state",
+  "validation status", "indexability status", "competition level",
+  "cannibalization risk", "rich result eligibility", "setup priority",
+  "review cadence", "retrieved", "retrieved date", "source", "count",
+  "element", "discovered urls", "total urls",
+]);
+
+// Headers that hold an actual URL/website address — wrap with break-all
+// instead of stretching the column to fit one long unbroken string.
+const _COL_URL_HEADERS = new Set(["url", "website", "target page", "assigned target url"]);
+
+// Substring fallbacks — used only when no exact header match is found above,
+// to still classify headers that vary slightly in wording from the template.
+const _COMPACT_SUBSTRINGS = ["competition", "status", "priority", "severity", "effort", "cadence"];
+const _URL_SUBSTRINGS = ["url", "website", "link"];
+
+function _classifyColumn(headerText) {
+  const text = headerText.trim().toLowerCase();
+
+  if (_COL_INDEX_HEADERS.has(text)) {
+    return "col-index";
+  }
+  if (_COL_COMPACT_HEADERS.has(text)) {
+    return "col-compact";
+  }
+  if (_COL_URL_HEADERS.has(text)) {
+    return "col-url";
+  }
+  if (_COMPACT_SUBSTRINGS.some((needle) => text.includes(needle))) {
+    return "col-compact";
+  }
+  if (_URL_SUBSTRINGS.some((needle) => text.includes(needle))) {
+    return "col-url";
+  }
+
+  // Default: every other column (recommendations, notes, impact, descriptions,
+  // blueprint specs, etc.) always gets the expanding treatment. No column is
+  // ever left unclassified, so no column can be squeezed narrow by its
+  // neighbours while holding long content — that inconsistency is exactly
+  // what previously made some table rows unnecessarily tall.
+  return "col-expand";
+}
+
 function formatReportTables(container) {
   const tables = container.querySelectorAll("table");
   tables.forEach((table) => {
@@ -266,45 +325,11 @@ function formatReportTables(container) {
 
     const headers = table.querySelectorAll("th");
     headers.forEach((th, index) => {
-      const text = th.textContent.trim().toLowerCase();
-      let colType = "";
-
-      if (text === "#" || text === "#index" || text === "index" || text === "# index" || text === "no.") {
-        colType = "col-index";
-      } else if (
-        text === "priority" ||
-        text === "severity" ||
-        text === "retrieved" ||
-        text === "source" ||
-        text === "count" ||
-        text === "element" ||
-        text === "status" ||
-        text === "current" ||
-        text.includes("competition")
-      ) {
-        colType = "col-compact";
-      } else if (text.includes("url") || text === "website" || text.includes("link")) {
-        colType = "col-url";
-      } else if (
-        text.includes("recommend") ||
-        text.includes("note") ||
-        text.includes("impact") ||
-        text.includes("issue") ||
-        text.includes("matter") ||
-        text.includes("gap") ||
-        text.includes("focus") ||
-        text.includes("strategy") ||
-        text.includes("structure")
-      ) {
-        colType = "col-expand";
-      }
-
-      if (colType) {
-        th.classList.add(colType);
-        table.querySelectorAll(`tr > :nth-child(${index + 1})`).forEach((cell) => {
-          cell.classList.add(colType);
-        });
-      }
+      const colType = _classifyColumn(th.textContent);
+      th.classList.add(colType);
+      table.querySelectorAll(`tr > :nth-child(${index + 1})`).forEach((cell) => {
+        cell.classList.add(colType);
+      });
     });
   });
 }
@@ -360,6 +385,8 @@ function resetSections() {
   if (metricCost) metricCost.textContent = "—";
   if (metricInputTokens) metricInputTokens.textContent = "—";
   if (metricOutputTokens) metricOutputTokens.textContent = "—";
+
+  if (downloadPdfBtn) downloadPdfBtn.href = "#";
 }
 
 function resetUI() {
