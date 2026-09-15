@@ -12,6 +12,8 @@ Run with:
     pytest test/test_pdf_service.py -v
 """
 
+import re  # Regex assertions on the generated filename's timestamp segment
+
 import pytest  # Test runner
 
 from src.services.pdf_service import (
@@ -21,6 +23,7 @@ from src.services.pdf_service import (
     _plain_text_length,        # Internal helper — column-width content measurement
     _render_markdown_blocks,   # Internal helper — full block-level Markdown parsing
     _split_table_row,          # Internal helper — Markdown table row parsing
+    build_pdf_filename,        # Public function under test — site+timestamp filename
     render_report_pdf,         # Public function under test
 )
 
@@ -75,6 +78,49 @@ class TestRenderReportPdf:
         """An empty Markdown report still renders a valid PDF (title block only)."""
         pdf_bytes = render_report_pdf(markdown_report="", url="https://example.com", audit_id="test-audit-004")
         assert pdf_bytes.startswith(b"%PDF-")
+
+
+# ---------------------------------------------------------------------------
+# build_pdf_filename() — site+date download filename
+# ---------------------------------------------------------------------------
+
+class TestBuildPdfFilename:
+    """Tests for the descriptive PDF download filename helper."""
+
+    def test_includes_hostname_slug_without_tld(self) -> None:
+        filename = build_pdf_filename("https://example.com")
+        assert "example" in filename
+        assert "-com" not in filename
+
+    def test_strips_www_prefix(self) -> None:
+        filename = build_pdf_filename("https://www.example.com")
+        assert "www" not in filename
+        assert "example" in filename
+
+    def test_includes_a_date_stamp_in_dd_mm_yyyy_format(self) -> None:
+        """The filename carries a dd_mm_yyyy date segment, with no time-of-day component."""
+        filename = build_pdf_filename("https://example.com")
+        match = re.search(r"-(\d{2}_\d{2}_\d{4})\.pdf$", filename)
+        assert match is not None
+
+    def test_ends_with_pdf_extension(self) -> None:
+        assert build_pdf_filename("https://example.com").endswith(".pdf")
+
+    def test_does_not_include_seo_audit_prefix(self) -> None:
+        assert not build_pdf_filename("https://example.com").startswith("seo-audit-")
+
+    def test_sanitizes_path_and_strips_tld_with_subdomain(self) -> None:
+        filename = build_pdf_filename("https://shop.example.co.uk/products?id=1")
+        assert "shop-example-co" in filename
+        assert "-uk" not in filename
+        assert "/" not in filename
+        assert "?" not in filename
+
+    def test_falls_back_to_report_when_hostname_is_unparseable(self) -> None:
+        """A malformed 'url' with no parseable host still produces a safe, non-empty filename."""
+        filename = build_pdf_filename("???")
+        assert filename.startswith("report-")
+        assert filename.endswith(".pdf")
 
 
 # ---------------------------------------------------------------------------

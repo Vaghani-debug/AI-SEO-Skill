@@ -15,12 +15,15 @@ and deciding what to do with the rendered PDF.
 Public interface
 ----------------
     render_report_pdf(markdown_report, url, audit_id) -> bytes
+    build_pdf_filename(url) -> str
 """
 
 import html  # html.unescape/html.escape — safely round-trip HTML entities already present in reports
 import io  # io.BytesIO — in-memory buffer ReportLab writes the PDF into
 import logging  # Standard logging — records render start/success/failure
 import re  # Markdown block/inline parsing (headings, tables, lists, bold/italic/links)
+from datetime import datetime, timezone  # Timestamps the generated filename with the current UTC time
+from urllib.parse import urlparse  # Extracts the hostname to use as the filename's site identifier
 
 from reportlab.lib import colors  # Named/hex colors for brand-consistent styling
 from reportlab.lib.enums import TA_LEFT  # Left-alignment constant for paragraph styles
@@ -55,6 +58,8 @@ _TABLE_HEADER_BG = colors.HexColor("#f0f4ff")  # Matches the UI's light blue tab
 _TABLE_GRID_COLOR = colors.HexColor("#dde3ec")  # Matches the UI's table border color
 _ROW_ALT_BG = colors.HexColor("#f9fbfd")  # Matches the UI's zebra-stripe row background
 _FOOTER_TEXT_COLOR = colors.HexColor("#94a3b8")  # Muted footer text color
+
+_FILENAME_UNSAFE_RE = re.compile(r"[^a-z0-9]+")  # Anything but lowercase letters/digits becomes a hyphen
 
 # ---------------------------------------------------------------------------
 # Inline Markdown/HTML parsing helpers
@@ -452,3 +457,22 @@ def render_report_pdf(markdown_report: str, url: str, audit_id: str) -> bytes:
     pdf_bytes = buffer.getvalue()
     logger.info("Rendered PDF report for audit_id=%s (%d bytes)", audit_id, len(pdf_bytes))
     return pdf_bytes
+
+
+def build_pdf_filename(url: str) -> str:
+    """
+    Build a descriptive, filesystem/header-safe PDF filename from the audited URL.
+
+    The filename identifies the audited site (domain suffix stripped, e.g.
+    "shreejahealthcare" rather than "shreejahealthcare-com") and the date the
+    PDF was generated as dd_mm_yyyy (e.g. "shreejahealthcare-15_09_2026.pdf"),
+    so repeated downloads on different days don't overwrite one another.
+    """
+    hostname = urlparse(url).netloc or url
+    hostname = hostname.removeprefix("www.")
+    domain_parts = hostname.split(".")
+    if len(domain_parts) > 1:
+        domain_parts = domain_parts[:-1]  # Drop the TLD (.com, .co.uk's "uk", etc.)
+    site_slug = _FILENAME_UNSAFE_RE.sub("-", ".".join(domain_parts).lower()).strip("-") or "report"
+    date_stamp = datetime.now(timezone.utc).strftime("%d_%m_%Y")
+    return f"{site_slug}-{date_stamp}.pdf"
