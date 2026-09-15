@@ -23,6 +23,7 @@
 // function runs (better performance and easier to read).
 
 const urlInput       = document.getElementById("website-url");    // The URL text input
+const providerSelect = document.getElementById("llm-provider-select"); // LLM provider dropdown
 const loadingSection = document.getElementById("loading-section"); // Spinner + message shown while waiting
 const loadingTimer   = document.getElementById("loading-timer");   // Live seconds counter while waiting
 const errorSection   = document.getElementById("error-section");   // Red error card shown on failure
@@ -54,7 +55,16 @@ async function handleAudit() {
   const rawUrl = urlInput.value.trim();
   // Read and trim the URL the user typed; trim() removes accidental leading/trailing spaces
 
+  const selectedProvider = providerSelect ? providerSelect.value : "";
+  // The blank default option has value="", so an unselected dropdown reads as empty
+
   // --- Local pre-validation ------------------------------------------------
+
+  if (!selectedProvider) {
+    // Guard: an LLM provider must be chosen before an audit can start
+    showError("Please select the model before you can start auditing.");
+    return; // Stop here — no point calling the API without a provider
+  }
 
   if (!rawUrl) {
     // Guard: reject empty input before making a network request
@@ -109,8 +119,8 @@ async function handleAudit() {
         // Tell the server the body is JSON so FastAPI's Pydantic model can parse it
       },
 
-      body: JSON.stringify({ url: rawUrl }),
-      // JSON.stringify converts the JS object to a JSON string: {"url": "https://..."}
+      body: JSON.stringify({ url: rawUrl, llm_provider: selectedProvider }),
+      // JSON.stringify converts the JS object to a JSON string: {"url": "https://...", "llm_provider": "gemini"}
       // This maps to the AuditRequest model in src/api/models.py
     });
 
@@ -401,7 +411,7 @@ function disableAuditButton(disabled) {
   // disabled=true: prevents clicks and dims the button while the audit runs
   // disabled=false: re-enables the button when the audit is complete
 
-  auditBtn.textContent = disabled ? "Auditing…" : "Audit";
+  auditBtn.textContent = disabled ? "⏳ Auditing…" : "✨ Audit";
   // Change button text to "Auditing…" while working so the user knows something is happening
 }
 

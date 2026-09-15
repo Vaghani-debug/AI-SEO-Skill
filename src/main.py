@@ -29,6 +29,25 @@ from src.api.routes.audit import router as audit_router  # Import the audit rout
 # Module-level logger — captures application lifecycle events (startup, shutdown, errors)
 logger = logging.getLogger(__name__)  # __name__ resolves to "src.main" in log output
 
+
+class _NoCacheStaticFiles(StaticFiles):
+    """
+    StaticFiles that forces browsers to revalidate the UI's HTML/CSS/JS on every
+    request instead of trusting their own heuristic cache.
+
+    Without this, browsers may serve a stale cached copy of app.js/styles.css
+    for a long time after a deploy (no explicit Cache-Control header means the
+    browser is free to guess a freshness window). "no-cache" still lets the
+    browser send a conditional request (If-None-Match/If-Modified-Since) and
+    get a cheap 304 when nothing changed, so this does not disable caching —
+    it just guarantees every request checks with the server first.
+    """
+
+    def file_response(self, *args, **kwargs):  # noqa: ANN001, ANN201 - matches Starlette's StaticFiles signature
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
 # Load settings once at module import time; all configuration comes from here
 settings = get_settings()  # Reads the configured LLM provider's API key, reports_dir, timeouts, etc. from .env
 
@@ -139,7 +158,7 @@ _static_dir = "src/static"  # Path to the folder that holds index.html, styles.c
 if os.path.isdir(_static_dir):
     app.mount(
         "/",  # Mount at the root path so http://127.0.0.1:8000/ serves index.html
-        StaticFiles(directory=_static_dir, html=True),  # html=True means index.html is the default file
+        _NoCacheStaticFiles(directory=_static_dir, html=True),  # html=True means index.html is the default file
         name="static",  # Internal name used by FastAPI to refer to this mount
     )
     logger.info("Static UI mounted from: %s", _static_dir)  # Confirm the UI directory was found

@@ -18,6 +18,11 @@
   <title>AI SEO Agent — SEO Audit Tool</title>
   <!-- title: shown in the browser tab and in search engine results -->
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
+  <!-- Google Fonts: Poppins for headings, Inter for body text — loaded via CDN, no build step required -->
+
   <link rel="stylesheet" href="/styles.css">
   <!-- link to the external stylesheet — FastAPI serves this from src/static/styles.css -->
 
@@ -29,6 +34,14 @@
 <body>
   <!-- body: everything visible to the user goes here -->
 
+  <div class="bg-decoration" aria-hidden="true">
+    <!-- bg-decoration: purely decorative blurred gradient shapes behind the page content -->
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+    <span class="blob blob-3"></span>
+  </div>
+  <!-- end bg-decoration -->
+
   <!-- ============================================================
        Page header
        ============================================================ -->
@@ -38,7 +51,9 @@
     <div class="header-inner">
       <!-- header-inner: constrains the header content to a readable max-width -->
 
-      <h1 class="site-title">AI SEO Agent</h1>
+      <h1 class="site-title">
+        <span class="site-icon" aria-hidden="true">🔍</span><span class="site-title-text">AI SEO Agent</span>
+      </h1>
       <!-- main heading: identifies the product at the top of the page -->
 
       <p class="site-tagline">Enter a website URL to generate a professional SEO audit report.</p>
@@ -62,7 +77,30 @@
       <div class="form-card">
         <!-- form-card: white card container that visually groups the input and button -->
 
-        <label for="website-url" class="form-label">Website URL</label>
+        <label for="llm-provider-select" class="form-label">🤖 LLM Provider</label>
+        <!-- label: links to the provider select below via the "for" attribute; required for accessibility -->
+
+        <select
+          id="llm-provider-select"
+          name="llm-provider"
+          class="provider-select"
+          aria-describedby="provider-hint"
+        >
+          <option value="" selected>-- Select a provider --</option>
+          <option value="perplexity">Perplexity</option>
+          <option value="gemini">Gemini</option>
+          <option value="openai">OpenAI</option>
+        </select>
+        <!-- provider-select: the user must choose one provider before an audit can start
+             - the blank "-- Select a provider --" option has no value, so it fails the required check in app.js
+             - aria-describedby links to the hint text below for screen readers -->
+
+        <p id="provider-hint" class="form-hint">
+          Choose which LLM provider generates this audit's report.
+        </p>
+        <!-- provider-hint: helper text shown below the select; linked via aria-describedby -->
+
+        <label for="website-url" class="form-label provider-field-spacing">🌐 Website URL</label>
         <!-- label: links to the input below via the "for" attribute; required for accessibility -->
 
         <div class="input-row">
@@ -89,7 +127,7 @@
             class="btn btn-primary"
             onclick="handleAudit()"
           >
-            Audit
+            ✨ Audit
           </button>
           <!-- audit button: clicking this starts the SEO audit
                - type="button" prevents accidental form submission
@@ -148,7 +186,7 @@
       <div class="error-card">
         <!-- error-card: red-bordered container that makes error messages stand out visually -->
 
-        <p class="error-title">Something went wrong</p>
+        <p class="error-title">⚠️ Something went wrong</p>
         <!-- error-title: fixed heading so the user knows this is an error, not part of the report -->
 
         <p id="error-message" class="error-message"></p>
@@ -183,10 +221,10 @@
       <div class="report-header">
         <!-- report-header: row containing the report title and the PDF download action -->
 
-        <h2 class="report-title">SEO Audit Report</h2>
+        <h2 class="report-title"><span aria-hidden="true">📊</span> <span class="report-title-text">SEO Audit Report</span></h2>
         <!-- report-title: section heading for the generated report -->
 
-        <a id="download-pdf-btn" class="btn btn-success" href="#" download>Download PDF</a>
+        <a id="download-pdf-btn" class="btn btn-success" href="#" download>⬇️ Download PDF</a>
         <!-- download-pdf-btn: href is set by app.js to /api/v1/audits/{audit_id}/pdf once a report is rendered -->
 
       </div>
@@ -199,21 +237,25 @@
       <!-- audit metrics summary cards -->
       <div class="report-metrics" id="report-metrics">
         <div class="metric-card">
+          <span class="metric-icon" aria-hidden="true">⏱️</span>
           <span class="metric-label">Elapsed Time</span>
           <span class="metric-value" id="metric-elapsed">—</span>
           <span class="metric-subtext">Total audit duration</span>
         </div>
         <div class="metric-card">
+          <span class="metric-icon" aria-hidden="true">💰</span>
           <span class="metric-label">Incurred Cost</span>
           <span class="metric-value" id="metric-cost">—</span>
           <span class="metric-subtext" id="metric-cost-subtext">LLM model usage</span>
         </div>
         <div class="metric-card">
+          <span class="metric-icon" aria-hidden="true">📥</span>
           <span class="metric-label">Input Tokens</span>
           <span class="metric-value" id="metric-input-tokens">—</span>
           <span class="metric-subtext">Prompt &amp; context</span>
         </div>
         <div class="metric-card">
+          <span class="metric-icon" aria-hidden="true">📤</span>
           <span class="metric-label">Output Tokens</span>
           <span class="metric-value" id="metric-output-tokens">—</span>
           <span class="metric-subtext">Generated content</span>

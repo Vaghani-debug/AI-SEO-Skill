@@ -1,9 +1,24 @@
 /* =============================================================================
    styles.css — AI SEO Agent MVP UI
-   Simple, professional stylesheet. No frameworks or build tools required.
+   Modern gradient + glassmorphism theme, with tasteful motion.
    All measurements use rem for accessibility (respects user font-size settings).
    ============================================================================= */
 
+
+/* --- Design tokens ---------------------------------------------------------- */
+
+:root {
+  --brand-navy: #0f3460; /* Core brand colour, reused across accents and focus rings */
+  --accent-1: #6366f1; /* Indigo — gradient start for buttons/headings */
+  --accent-2: #8b5cf6; /* Violet — gradient midpoint */
+  --accent-3: #06b6d4; /* Cyan — gradient end, ties into the SEO/data theme */
+  --glass-bg: rgba(255, 255, 255, 0.68); /* Frosted card background */
+  --glass-border: rgba(255, 255, 255, 0.55); /* Frosted card edge highlight */
+  --glass-shadow: 0 8px 32px rgba(99, 102, 241, 0.16), 0 2px 8px rgba(15, 52, 96, 0.06); /* Soft tinted depth */
+  --radius-lg: 20px; /* Shared rounded-corner size for major cards */
+  --radius-md: 12px; /* Shared rounded-corner size for buttons/inputs */
+  --ease-soft: cubic-bezier(0.16, 1, 0.3, 1); /* Gentle overshoot easing for entrance animations */
+}
 
 /* --- Reset and base -------------------------------------------------------- */
 
@@ -19,38 +34,126 @@ html {
 body {
   margin: 0; /* Remove the default browser margin around the page */
   padding: 0; /* Remove the default browser padding */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; /* System font stack — no download required, looks native on all OS */
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; /* Inter for a polished look; system fallback if the CDN font is blocked */
   font-size: 1rem; /* Body text size matches the base font size */
   line-height: 1.6; /* Comfortable reading line height */
   color: #1a1a2e; /* Dark navy body text — easier to read than pure black */
-  background-color: #f5f7fa; /* Light grey background so the white cards stand out */
+  background: linear-gradient(160deg, #eef2ff 0%, #f5f3ff 45%, #ecfeff 100%); /* Soft indigo-to-cyan wash behind the glass cards */
+  min-height: 100vh; /* Gradient fills the full viewport even on short pages */
+  position: relative; /* Establishes the stacking context for the decorative blobs */
+  overflow-x: hidden; /* The blurred blobs are intentionally oversized; never cause horizontal scroll */
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Poppins", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; /* Poppins for headings — a bolder, more distinctive display face */
+}
+
+/* --- Decorative background blobs -------------------------------------------
+   Purely visual, aria-hidden in the HTML. Fixed so they stay put while
+   scrolling, blurred and low-opacity so they never compete with content. */
+
+.bg-decoration {
+  position: fixed;
+  inset: 0;
+  z-index: -1; /* Always behind every real content section */
+  overflow: hidden;
+  pointer-events: none; /* Never intercepts clicks/taps */
+}
+
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.35;
+  animation: blobFloat 18s ease-in-out infinite;
+}
+
+.blob-1 {
+  width: 420px;
+  height: 420px;
+  top: -120px;
+  left: -100px;
+  background: radial-gradient(circle, var(--accent-1), transparent 70%);
+}
+
+.blob-2 {
+  width: 380px;
+  height: 380px;
+  top: 20%;
+  right: -140px;
+  background: radial-gradient(circle, var(--accent-3), transparent 70%);
+  animation-delay: -6s; /* Offsets this blob's cycle so all three never move in sync */
+}
+
+.blob-3 {
+  width: 320px;
+  height: 320px;
+  bottom: -100px;
+  left: 30%;
+  background: radial-gradient(circle, var(--accent-2), transparent 70%);
+  animation-delay: -11s;
+}
+
+@keyframes blobFloat {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -20px) scale(1.08); }
+  66% { transform: translate(-20px, 25px) scale(0.95); }
 }
 
 
-/* --- Site header ----------------------------------------------------------- */
+/* --- Site header (hero) ------------------------------------------------------ */
 
 .site-header {
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%); /* Dark navy gradient — professional, distinct from the page body */
+  background: linear-gradient(120deg, #1a1a2e 0%, #16213e 45%, #0f3460 75%, #1e3a6e 100%);
+  background-size: 200% 200%; /* Oversized so the position can animate smoothly */
+  animation: auroraShift 12s ease-in-out infinite; /* Slow drifting gradient — an "aurora" effect */
   color: #ffffff; /* White text on the dark header background */
-  padding: 2rem 1rem; /* Vertical breathing room around the title */
+  padding: 3rem 1rem 3.5rem; /* Generous vertical breathing room for a hero feel */
   text-align: center; /* Centre the title and tagline */
+  box-shadow: 0 4px 30px rgba(15, 52, 96, 0.35); /* Depth separating the hero from the page below */
+}
+
+@keyframes auroraShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
 }
 
 .header-inner {
   max-width: 800px; /* Constrain content width for comfortable reading on wide screens */
   margin: 0 auto; /* Centre the inner container horizontally */
+  animation: fadeInUp 0.7s var(--ease-soft) both; /* Hero content gently rises into place on load */
+}
+
+.site-icon {
+  display: inline-block;
+  font-size: 2rem;
+  margin-right: 0.5rem;
+  animation: iconPulse 3s ease-in-out infinite; /* Subtle breathing motion draws the eye without being distracting */
+}
+
+@keyframes iconPulse {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50% { transform: scale(1.12) rotate(-4deg); }
 }
 
 .site-title {
-  font-size: 2rem; /* Large heading to establish visual hierarchy */
+  font-size: 2.35rem; /* Large heading to establish visual hierarchy */
   font-weight: 700; /* Bold weight for the product name */
-  margin: 0 0 0.5rem; /* Remove default top margin; add a small gap below */
+  margin: 0 0 0.6rem; /* Remove default top margin; add a small gap below */
   letter-spacing: -0.5px; /* Tighten letter spacing slightly for headings */
 }
 
+.site-title-text {
+  background: linear-gradient(90deg, #ffffff 0%, #c7d2fe 50%, #a5f3fc 100%); /* White-to-accent gradient text */
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
 .site-tagline {
-  font-size: 1rem; /* Normal body size — the tagline is supporting text */
-  opacity: 0.85; /* Slightly dimmed so it does not compete with the title */
+  font-size: 1.05rem; /* Normal body size — the tagline is supporting text */
+  opacity: 0.88; /* Slightly dimmed so it does not compete with the title */
   margin: 0; /* Remove default paragraph margins */
 }
 
@@ -72,10 +175,14 @@ body {
 }
 
 .form-card {
-  background: #ffffff; /* White card stands out from the grey page background */
-  border-radius: 12px; /* Rounded corners for a modern, friendly appearance */
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); /* Subtle shadow gives the card depth */
-  padding: 2rem; /* Internal spacing between the card edges and its content */
+  background: var(--glass-bg); /* Frosted-glass card stands out from the gradient page background */
+  backdrop-filter: blur(18px); /* The actual "frosted glass" blur of whatever is behind the card */
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border); /* Faint light edge sells the glass effect */
+  border-radius: var(--radius-lg); /* Rounded corners for a modern, friendly appearance */
+  box-shadow: var(--glass-shadow); /* Soft tinted depth instead of a flat grey shadow */
+  padding: 2.25rem; /* Internal spacing between the card edges and its content */
+  animation: fadeInUp 0.6s var(--ease-soft) both 0.1s; /* Rises into place just after the hero */
 }
 
 .form-label {
@@ -93,19 +200,46 @@ body {
 
 .url-input {
   flex: 1; /* Input grows to fill all available space; button keeps its natural width */
-  padding: 0.75rem 1rem; /* Comfortable tap/click target size */
+  padding: 0.8rem 1.1rem; /* Comfortable tap/click target size */
   font-size: 1rem; /* Match body font size so text does not look small inside the input */
-  border: 2px solid #dde3ec; /* Light blue-grey border at rest */
-  border-radius: 8px; /* Slightly rounded corners on the input */
+  border: 2px solid rgba(15, 52, 96, 0.12); /* Light blue-grey border at rest */
+  border-radius: var(--radius-md); /* Slightly rounded corners on the input */
   outline: none; /* Remove default browser outline — we draw our own on focus */
-  transition: border-color 0.2s ease; /* Smooth border colour change on focus */
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; /* Smooth focus feedback */
   color: #1a1a2e; /* Dark text inside the input */
-  background: #f9fbfd; /* Very light blue tint inside the input */
+  background: rgba(255, 255, 255, 0.55); /* Translucent tint so the glass card shows through slightly */
 }
 
 .url-input:focus {
-  border-color: #0f3460; /* Dark blue border on focus — clear visual feedback */
+  border-color: var(--accent-1); /* Accent-coloured border on focus — clear visual feedback */
   background: #ffffff; /* Pure white background when the user is typing */
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15); /* Soft glow ring around the focused field */
+}
+
+.provider-select {
+  width: 100%; /* Fills the form card width, matching the URL input row below it */
+  padding: 0.8rem 2.5rem 0.8rem 1.1rem; /* Extra right padding leaves room for the custom chevron */
+  font-size: 1rem; /* Match body font size */
+  border: 2px solid rgba(15, 52, 96, 0.12); /* Light blue-grey border at rest, matching .url-input */
+  border-radius: var(--radius-md); /* Slightly rounded corners */
+  outline: none; /* Remove default browser outline — we draw our own on focus */
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; /* Smooth focus feedback */
+  color: #1a1a2e; /* Dark text */
+  background: rgba(255, 255, 255, 0.55) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%230f3460' stroke-width='2'%3E%3Cpath d='M5 7.5l5 5 5-5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 0.9rem center; /* Custom chevron, since appearance:none removes the native browser arrow */
+  background-size: 14px;
+  appearance: none; /* Removes the native select arrow so the custom chevron above is not duplicated */
+  -webkit-appearance: none;
+  cursor: pointer; /* Indicates the field is selectable */
+}
+
+.provider-select:focus {
+  border-color: var(--accent-1); /* Accent-coloured border on focus — matches .url-input:focus */
+  background-color: #ffffff; /* Pure white background when focused */
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15); /* Soft glow ring, matching .url-input:focus */
+}
+
+.provider-field-spacing {
+  margin-top: 1.25rem; /* Separates the URL field group from the provider select above it */
 }
 
 .form-hint {
@@ -118,14 +252,29 @@ body {
 /* --- Buttons --------------------------------------------------------------- */
 
 .btn {
-  padding: 0.75rem 1.5rem; /* Comfortable tap target */
+  position: relative; /* Anchors the ::after shimmer sweep to this element */
+  overflow: hidden; /* Clips the shimmer sweep to the button's rounded shape */
+  padding: 0.8rem 1.6rem; /* Comfortable tap target */
   font-size: 1rem; /* Match body font size */
   font-weight: 600; /* Semi-bold text on buttons */
   border: none; /* No border — the background colour defines the button */
-  border-radius: 8px; /* Rounded corners matching the input */
+  border-radius: var(--radius-md); /* Rounded corners matching the input */
   cursor: pointer; /* Pointer cursor tells users the element is clickable */
-  transition: background-color 0.2s ease, transform 0.1s ease; /* Smooth hover and press animations */
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease; /* Smooth hover and press animations */
   white-space: nowrap; /* Prevent button text from wrapping onto two lines */
+}
+
+.btn::after {
+  content: ""; /* Decorative shimmer sweep, purely visual */
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 40%, rgba(255, 255, 255, 0.35) 50%, transparent 60%);
+  transform: translateX(-120%);
+  transition: transform 0.5s ease;
+}
+
+.btn:hover::after {
+  transform: translateX(120%); /* Sweeps a soft highlight across the button on hover */
 }
 
 .btn:active {
@@ -133,12 +282,14 @@ body {
 }
 
 .btn-primary {
-  background-color: #0f3460; /* Dark blue primary action button */
-  color: #ffffff; /* White text on the dark button */
+  background: linear-gradient(135deg, var(--accent-1), var(--accent-2)); /* Indigo-to-violet gradient primary action */
+  color: #ffffff; /* White text on the gradient button */
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35); /* Coloured glow under the primary button */
 }
 
 .btn-primary:hover {
-  background-color: #1a4f8a; /* Lighter blue on hover — visible hover state */
+  transform: translateY(-2px); /* Lifts slightly on hover for tactile feedback */
+  box-shadow: 0 8px 22px rgba(99, 102, 241, 0.45); /* Glow intensifies on hover */
 }
 
 .btn-secondary {
@@ -148,15 +299,18 @@ body {
 
 .btn-secondary:hover {
   background-color: #d1d5db; /* Slightly darker grey on hover */
+  transform: translateY(-1px); /* Subtle lift, less pronounced than the primary button */
 }
 
 .btn-success {
-  background-color: #059669; /* Green — positive action */
+  background: linear-gradient(135deg, #059669, #10b981); /* Green gradient — positive action */
   color: #ffffff; /* White text */
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.3); /* Coloured glow under the success button */
 }
 
 .btn-success:hover {
-  background-color: #047857; /* Darker green on hover */
+  transform: translateY(-2px); /* Lifts slightly on hover, matching .btn-primary:hover */
+  box-shadow: 0 8px 22px rgba(5, 150, 105, 0.4); /* Glow intensifies on hover */
 }
 
 
@@ -166,30 +320,39 @@ body {
   display: flex; /* Flex layout to centre the spinner and message */
   flex-direction: column; /* Stack spinner above message */
   align-items: center; /* Centre children horizontally */
-  gap: 1rem; /* Space between spinner and message */
+  gap: 1.1rem; /* Space between spinner and message */
   padding: 3rem; /* Large padding makes the loading section feel spacious */
+  background: var(--glass-bg); /* Frosted card, consistent with .form-card */
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
+  max-width: 860px;
+  margin: 0 auto 2rem;
 }
 
 .loading-message {
   font-size: 1rem; /* Normal body text */
-  color: #6b7280; /* Muted grey — not alarming, just informative */
+  color: #4b5563; /* Muted grey — not alarming, just informative */
   margin: 0; /* Remove default paragraph margins */
 }
 
 .loading-timer {
   font-weight: 700;
-  color: #0f3460;
+  color: var(--accent-1);
   font-variant-numeric: tabular-nums;
 }
 
-/* Spinner: an animated ring drawn with CSS borders */
+/* Spinner: a gradient conic ring with a soft rotating glow */
 .spinner {
-  width: 48px; /* Width of the spinning ring */
-  height: 48px; /* Height of the spinning ring */
-  border: 5px solid #dde3ec; /* Light grey ring — the "track" the spinner moves on */
-  border-top-color: #0f3460; /* Dark blue segment — the "moving" part of the spinner */
-  border-radius: 50%; /* Make the border into a circle */
-  animation: spin 0.8s linear infinite; /* Continuously rotate the element */
+  width: 52px; /* Width of the spinning ring */
+  height: 52px; /* Height of the spinning ring */
+  border-radius: 50%; /* Make the shape a circle */
+  background: conic-gradient(from 0deg, var(--accent-1), var(--accent-2), var(--accent-3), var(--accent-1));
+  animation: spin 1s linear infinite; /* Continuously rotate the element */
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px)); /* Cuts out the centre so only a ring is visible */
 }
 
 @keyframes spin {
@@ -201,14 +364,27 @@ body {
 
 .error-section {
   margin-bottom: 2rem; /* Space below the error card before other sections */
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .error-card {
-  background: #fff5f5; /* Very light red background — signals a problem without being alarming */
+  background: rgba(255, 245, 245, 0.85); /* Very light red, translucent to match the glass theme */
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border: 1px solid #fca5a5; /* Light red border */
   border-left: 4px solid #dc2626; /* Bold red left stripe draws the eye to the error */
-  border-radius: 8px; /* Consistent border-radius */
+  border-radius: var(--radius-md); /* Consistent border-radius */
   padding: 1.5rem; /* Comfortable internal padding */
+  animation: shake 0.4s ease; /* One quick attention-grabbing shake when the error appears */
+}
+
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
 }
 
 .error-title {
@@ -227,6 +403,7 @@ body {
 
 .report-section {
   margin-bottom: 3rem; /* Space below the report so it does not sit against the footer */
+  animation: fadeInUp 0.5s var(--ease-soft) both; /* Report gently rises into view once ready */
 }
 
 .report-header {
@@ -239,10 +416,18 @@ body {
 }
 
 .report-title {
-  font-size: 1.5rem; /* Prominent but smaller than the page title */
+  font-size: 1.6rem; /* Prominent but smaller than the page title */
   font-weight: 700; /* Bold */
-  color: #1a1a2e; /* Dark navy */
+  color: #1a1a2e; /* Dark navy fallback for the icon and any non-gradient content */
   margin: 0; /* Remove default heading margins */
+}
+
+.report-title-text {
+  background: linear-gradient(90deg, var(--brand-navy), var(--accent-1)); /* Brand-to-accent gradient text, echoing the hero title */
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 .report-meta {
@@ -261,20 +446,39 @@ body {
 }
 
 .metric-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 0.875rem 1.15rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  position: relative; /* Anchors the ::before top accent bar */
+  overflow: hidden; /* Clips the accent bar to the card's rounded corners */
+  background: rgba(255, 255, 255, 0.7); /* Translucent, consistent with the glass theme */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 14px;
+  padding: 1rem 1.15rem 0.875rem;
+  box-shadow: 0 2px 10px rgba(15, 52, 96, 0.07);
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.metric-card::before {
+  content: ""; /* Decorative gradient accent bar along the top edge of each card */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent-1), var(--accent-2), var(--accent-3));
 }
 
 .metric-card:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(15, 52, 96, 0.14);
+}
+
+.metric-icon {
+  font-size: 1.1rem; /* Small decorative icon above each metric's label */
+  margin-bottom: 0.1rem;
 }
 
 .metric-label {
@@ -288,7 +492,7 @@ body {
 .metric-value {
   font-size: 1.35rem;
   font-weight: 700;
-  color: #0f3460;
+  color: var(--brand-navy);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
@@ -299,9 +503,9 @@ body {
 }
 
 .report-body {
-  background: #ffffff; /* White background for the report text */
-  border-radius: 12px; /* Consistent rounded corners */
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); /* Same shadow as the form card */
+  background: #ffffff; /* White background for the report text — kept opaque/solid for maximum readability of dense data */
+  border-radius: var(--radius-lg); /* Consistent rounded corners with the rest of the redesigned UI */
+  box-shadow: var(--glass-shadow); /* Same soft tinted depth as the other cards */
   padding: 2rem; /* Internal padding so text does not touch the card edges */
   line-height: 1.8; /* Generous line height for long report text */
 }
@@ -484,14 +688,45 @@ body {
 }
 /* app.js adds/removes this class to show and hide sections dynamically */
 
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Every top-level state section re-plays its entrance animation each time
+   app.js removes .hidden (e.g. switching from loading to report, or to error). */
+.loading-section:not(.hidden),
+.error-section:not(.hidden),
+.report-section:not(.hidden) {
+  animation: fadeInUp 0.5s var(--ease-soft) both;
+}
+
+/* Respect users who have asked their OS/browser to minimise motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 
 /* --- Site footer ----------------------------------------------------------- */
 
 .site-footer {
   text-align: center; /* Centre the footer text */
-  padding: 1.5rem 1rem; /* Vertical and horizontal padding */
-  background: #f0f4ff; /* Light blue tint distinguishes the footer from the main content */
-  border-top: 1px solid #dde3ec; /* Thin rule separates the footer from the content above */
+  padding: 1.75rem 1rem; /* Vertical and horizontal padding */
+  background: rgba(240, 244, 255, 0.6); /* Translucent light blue tint distinguishes the footer from the main content */
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(221, 227, 236, 0.7); /* Thin rule separates the footer from the content above */
   margin-top: 2rem; /* Space between the last content section and the footer */
 }
 
@@ -521,6 +756,10 @@ body {
   }
 
   .site-title {
-    font-size: 1.5rem; /* Slightly smaller title on very narrow screens */
+    font-size: 1.6rem; /* Slightly smaller title on very narrow screens */
+  }
+
+  .blob {
+    display: none; /* Skip the decorative blobs on small screens — keeps things fast and uncluttered */
   }
 }
