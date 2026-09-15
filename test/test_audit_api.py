@@ -254,6 +254,89 @@ class TestStartAuditValidationErrors:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/audits/ — llm_provider selection
+# ---------------------------------------------------------------------------
+
+class TestStartAuditLlmProviderSelection:
+    """Tests for the optional per-request LLM provider override."""
+
+    def test_invalid_llm_provider_returns_422(self, client: TestClient) -> None:
+        """A provider name outside perplexity/gemini/openai is rejected by Pydantic validation."""
+        response = client.post(
+            "/api/v1/audits/", json={"url": "https://example.com", "llm_provider": "chatgpt"},
+        )
+        assert response.status_code == 422
+
+    def test_missing_llm_provider_defaults_to_server_configured_provider(
+        self, client: TestClient, tmp_path: Path,
+    ) -> None:
+        """Omitting llm_provider falls back to the server's configured default (API-only callers)."""
+        from src.api.routes.audit import _settings as real_settings
+
+        captured: dict = {}
+
+        async def fake_generate_report(**kwargs):
+            captured["settings"] = kwargs["settings"]
+            return _make_report_result()
+
+        with (
+            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
+            patch("src.api.routes.audit.fetch_site", new=AsyncMock(return_value=_make_site_fetch_result())),
+            patch("src.api.routes.audit.extract", return_value=MagicMock()),
+            patch("src.api.routes.audit.load_prompt_context", return_value=MagicMock()),
+            patch("src.api.routes.audit.generate_report", new=AsyncMock(side_effect=fake_generate_report)),
+        ):
+            response = client.post("/api/v1/audits/", json={"url": "https://example.com"})
+
+        assert response.status_code == 202
+        assert captured["settings"].llm_provider == real_settings.llm_provider
+
+    def test_explicit_llm_provider_overrides_server_default(
+        self, client: TestClient, tmp_path: Path,
+    ) -> None:
+        """An explicit llm_provider in the request is what actually reaches generate_report()."""
+        captured: dict = {}
+
+        async def fake_generate_report(**kwargs):
+            captured["settings"] = kwargs["settings"]
+            return _make_report_result()
+
+        with (
+            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
+            patch("src.api.routes.audit.fetch_site", new=AsyncMock(return_value=_make_site_fetch_result())),
+            patch("src.api.routes.audit.extract", return_value=MagicMock()),
+            patch("src.api.routes.audit.load_prompt_context", return_value=MagicMock()),
+            patch("src.api.routes.audit.generate_report", new=AsyncMock(side_effect=fake_generate_report)),
+        ):
+            response = client.post(
+                "/api/v1/audits/", json={"url": "https://example.com", "llm_provider": "openai"},
+            )
+
+        assert response.status_code == 202
+        assert captured["settings"].llm_provider == "openai"
+
+    def test_provider_override_does_not_mutate_global_settings(
+        self, client: TestClient, tmp_path: Path,
+    ) -> None:
+        """Selecting a provider for one request must not leak into the shared settings singleton."""
+        from src.api.routes.audit import _settings as real_settings
+
+        original_provider = real_settings.llm_provider
+        other_provider = "openai" if original_provider != "openai" else "gemini"
+
+        with (
+            patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")),
+            patch("src.api.routes.audit.fetch_site", new=AsyncMock(return_value=_make_site_fetch_result())),
+            patch("src.api.routes.audit.extract", return_value=MagicMock()),
+            patch("src.api.routes.audit.load_prompt_context", return_value=MagicMock()),
+            patch("src.api.routes.audit.generate_report", new=AsyncMock(return_value=_make_report_result())),
+        ):
+            client.post("/api/v1/audits/", json={"url": "https://example.com", "llm_provider": other_provider})
+
+        assert real_settings.llm_provider == original_provider
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/audits/ — service error cases
 # ---------------------------------------------------------------------------
 
@@ -486,12 +569,14 @@ class TestGetAuditPdf:
     def test_response_has_attachment_content_disposition(self, client: TestClient, tmp_path: Path) -> None:
         """The response includes a Content-Disposition header that triggers a browser download."""
         audit_id = "pdf-disposition"
-        _mock_json_path(tmp_path, audit_id)
+        _mock_json_path(tmp_path, audit_id, url="https://www.example.com")
         with patch("src.api.routes.audit._settings.reports_dir", str(tmp_path / "reports")):
             response = client.get(f"/api/v1/audits/{audit_id}/pdf")
         disposition = response.headers["content-disposition"]
         assert "attachment" in disposition
-        assert audit_id in disposition
+        assert "example" in disposition
+        assert "-com" not in disposition
+        assert disposition.endswith('.pdf"')
 
     def test_response_body_is_a_valid_pdf(self, client: TestClient, tmp_path: Path) -> None:
         """The response body starts with the PDF file signature."""

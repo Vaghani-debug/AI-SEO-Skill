@@ -12,7 +12,7 @@ every field explaining what it holds and why.
 """
 
 from datetime import datetime, timezone  # datetime.now(timezone.utc) for timezone-aware UTC timestamps
-from typing import Optional  # Marks fields that may be absent (None allowed)
+from typing import Literal, Optional  # Literal restricts llm_provider to the three supported values; Optional marks absent-allowed fields
 
 from pydantic import BaseModel, Field, HttpUrl  # BaseModel for data classes; Field for defaults/docs; HttpUrl for URL validation
 
@@ -25,9 +25,9 @@ class AuditRequest(BaseModel):
     """
     Payload sent by the UI when the user clicks the Audit button.
 
-    The only required input is the website URL.  The URL may be a bare domain
-    (e.g. www.example.com) — the url_service will normalise it to a full URL
-    before fetching.
+    The website URL is always required.  llm_provider lets the UI override
+    the server's configured default provider for this one audit; when omitted
+    (e.g. an API-only caller), the server falls back to its configured default.
     """
 
     url: str = Field(
@@ -36,6 +36,13 @@ class AuditRequest(BaseModel):
         max_length=2048,  # Limit to a sensible URL length
         description="Website URL or bare domain to audit (e.g. https://example.com or www.example.com)",
         examples=["https://www.truelinesolution.com", "www.example.com"],  # Shown in /docs
+    )
+
+    llm_provider: Optional[Literal["perplexity", "gemini", "openai"]] = Field(
+        default=None,  # None means "use the server's configured default provider"
+        description="LLM provider to use for this audit ('perplexity', 'gemini', or 'openai'). "
+        "The UI requires an explicit selection; API callers may omit it to use the server default.",
+        examples=["gemini"],  # Shown in /docs
     )
 
 

@@ -27,12 +27,12 @@ from fastapi import APIRouter, HTTPException, status  # Router, HTTP error helpe
 from fastapi.responses import Response  # Response returns raw PDF bytes with a download header
 
 from src.api.models import AuditError, AuditRequest, AuditResult, AuditStatusResult  # Pydantic request/response models
-from src.config import get_settings  # Application settings — API key, model name, reports dir
+from src.config import Settings, get_settings  # Settings type hint + application settings singleton
 from src.services.audit_job_service import create_job, get_job, update_job  # In-process job tracking (Phase 5)
 from src.services.audit_models import AuditJobStatus  # Job lifecycle enum
 from src.services.extractor_service import extract  # Extracts verified SEO data from fetched HTML
 from src.services.fetch_service import fetch_site  # Fetches homepage, robots.txt, and sitemaps
-from src.services.pdf_service import render_report_pdf  # Renders a stored Markdown report into a PDF
+from src.services.pdf_service import build_pdf_filename, render_report_pdf  # PDF rendering + filename helpers
 from src.services.prompt_loader import PromptContext, load_prompt_context  # Loads guidance files from disk
 from src.services.report_service import ReportResult, generate_report  # Report generation
 from src.services.url_service import normalize_and_validate  # Normalises and validates the input URL
@@ -84,6 +84,12 @@ async def start_audit(request: AuditRequest) -> AuditResult:
     """
     logger.info("Audit requested for URL: %s", request.url)  # Log the raw user input
 
+    # llm_provider defaults to the server's configured provider when the caller omits it
+    # (e.g. API-only callers); the UI always sends an explicit choice.
+    selected_provider = request.llm_provider or _settings.llm_provider
+    request_settings = _settings.model_copy(update={"llm_provider": selected_provider})
+    logger.info("Using LLM provider: %s", selected_provider)
+
     # --- Step 1: Validate and normalise the URL ----------------------------
 
     validation = normalize_and_validate(request.url)
@@ -126,7 +132,9 @@ async def start_audit(request: AuditRequest) -> AuditResult:
         # --- Steps 3-5: Fetch, extract evidence, and generate the report -------
 
         update_job(job_audit_id, status=AuditJobStatus.GENERATING)
-        report_result = await _generate_report_legacy_pipeline(normalized_url, prompt_context, job_audit_id)
+        report_result = await _generate_report_legacy_pipeline(
+            normalized_url, prompt_context, job_audit_id, request_settings,
+        )
 
         audit_id: str = report_result.audit_id  # Unique ID for this audit — used as filename
         elapsed_seconds: float = (
@@ -188,14 +196,14 @@ async def start_audit(request: AuditRequest) -> AuditResult:
 # ---------------------------------------------------------------------------
 
 async def _generate_report_legacy_pipeline(
-    normalized_url: str, prompt_context: PromptContext, audit_id: str,
+    normalized_url: str, prompt_context: PromptContext, audit_id: str, settings: Settings,
 ) -> ReportResult:
     """
     Original one-shot flow: fetch the homepage only, extract AuditEvidence,
     and generate the whole report in a single LLM call.
     """
     try:
-        site = await fetch_site(normalized_url, _settings)
+        site = await fetch_site(normalized_url, settings)
         # fetch_service downloads the page and auxiliary files concurrently
         # Fetch failures are recorded in the result rather than raised as exceptions
     except Exception as fetch_error:
@@ -230,7 +238,7 @@ async def _generate_report_legacy_pipeline(
             normalized_url=normalized_url,
             evidence=evidence,
             prompt_context=prompt_context,
-            settings=_settings,
+            settings=settings,
             audit_id=audit_id,
         )
         # report_service substitutes the URL, assembles the system prompt,
@@ -386,10 +394,11 @@ async def get_audit_pdf(audit_id: str) -> Response:
             detail="Could not generate the PDF report. Please try again.",
         )
 
+    filename = build_pdf_filename(data["url"])
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="seo-audit-{audit_id}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
