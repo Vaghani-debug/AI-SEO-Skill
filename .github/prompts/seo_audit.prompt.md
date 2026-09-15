@@ -233,14 +233,26 @@ SECTION 1 (Keyword Opportunity Strategy) and SECTION 2 (Competitor Analysis) rel
 
 ---
 
-# Conditional Section Rules (SECTION 3: Location & Market Expansion)
+# Section Completeness Rule (No "Not Applicable" Discrimination)
 
-SECTION 3 must contain either 3.2 or 3.3, never both filled in, and never both empty:
+Every report section must be fully completed for every website, regardless of business type, industry, or size. Never write "Not applicable", "N/A", "does not apply", or any equivalent dismissal to skip a section — every business has a relevant angle for every section, and your job as a senior SEO consultant is to find and articulate it.
 
-- If the business evidence indicates a local, regional, or service-area business (physical location, city/region references, "near me" services) or multi-location expansion opportunities, complete section 3.2 (Local Location Opportunities) with the City-Wise Keyword Volume & Competition Table containing 15-25 target cities/regions, their primary keywords, estimated search volumes, competition levels (Low/Medium/High), priority metrics (High/Medium/Low), source, and retrieved date. Write "Not applicable — business is not location-based." under 3.3.
-- If the business is not location-based (e-commerce, SaaS, national/global content site), complete section 3.3 (Audience & Market Expansion Opportunities) with realistic audience segments or market verticals, and write "Not applicable — business does not target specific locations." under 3.2.
-- Always complete 3.1 (Applicability Assessment) first, explaining which path was chosen and why, based on evidence from the crawl (address/NAP data, service-area language, business type).
-- For section 3.2, populate at least 15 to 25 target cities with comprehensive keyword volume, competition levels, and priority metrics.
+This applies everywhere in the report, and is enforced with a specific rule for SECTION 3 below.
+
+---
+
+# SECTION 3: Location & Market Expansion Strategy (Always Fully Completed)
+
+SECTION 3 must always contain BOTH 3.2 and 3.3 fully completed with real, actionable content. Never leave either subsection empty or marked not applicable — every website has a meaningful location and audience expansion angle:
+
+- Always complete 3.1 (Applicability Assessment) first: state plainly, based on evidence from the crawl (address/NAP data, service-area language, business type, shipping/market coverage), whether the business is physically location-based, multi-location, national, or global — this framing determines HOW 3.2 is approached, not WHETHER it is completed.
+- Complete 3.2 (Location & Geographic Growth Opportunities) for every site:
+  - If the business evidence indicates a local, regional, or service-area business (physical location, city/region references, "near me" services) or multi-location expansion opportunities, populate the Location & Regional Keyword Opportunity Table with 15-25 target cities/regions, their primary keywords, estimated search volumes, competition levels (Low/Medium/High), priority metrics (High/Medium/Low), source, and retrieved date.
+  - If the business is not location-based in the traditional sense (e-commerce, SaaS, national/global content site), pivot 3.2 to genuine geographic growth strategy instead of dismissing it: identify 15-25 target regions, countries, or language markets with real demand for the product/content, and recommend concrete tactics such as regional/international SEO (hreflang, ccTLD/subfolder strategy), geo-targeted landing pages or campaigns, regional content localization, or location-based digital PR/partnerships. The goal is always to explain how to grow traffic across locations — never to opt out of the section.
+  - Populate the Top 5 Location/Market Landing Page Blueprints table for the five highest-priority cities, regions, or markets identified above, adapting each field (e.g. Recommended Schema Type, Localized Trust Signal) to fit the business model.
+- Complete 3.3 (Audience & Market Expansion Opportunities) for every site with realistic audience segments or market verticals — this runs alongside 3.2, not instead of it.
+
+---
 
 ---
 
@@ -331,7 +343,9 @@ Before returning the report, verify that:
 
 ✓ Every numeric claim in SECTIONS 1, 2, and 3 has a non-empty Source and Retrieved value and is phrased as an estimate.
 
-✓ SECTION 3 contains exactly one completed subsection (3.2 or 3.3), with the other marked not applicable.
+✓ Every section is fully completed for this specific business — no section anywhere in the report is dismissed as "Not applicable" or equivalent.
+
+✓ SECTION 3 contains BOTH 3.2 and 3.3 fully completed with real, actionable content — neither subsection is marked not applicable, regardless of business type.
 
 ✓ No mention of Perplexity, Comet browser, ChatGPT, Google Docs, or any AI-tool branding, chat transcript text, or references to prior conversations/attachments appears anywhere.
 

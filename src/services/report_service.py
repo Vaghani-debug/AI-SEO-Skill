@@ -124,11 +124,16 @@ def _extract_section_body(markdown_report: str, heading_prefix: str) -> str | No
 
 def _validate_location_section(markdown_report: str) -> list[str]:
     """
-    Enforce SECTION 3's conditional rule: exactly one of 3.2 or 3.3 must be
-    completed, with the other explicitly marked not applicable.
+    Enforce that SECTION 3 (Location & Market Expansion Strategy) is always
+    fully completed: neither 3.2 nor 3.3 may be dismissed as "not applicable",
+    regardless of the business type. A non-location-based business still
+    requires 3.2 to propose real geographic/location-based growth tactics
+    (e.g. regional/international SEO, geo-targeted content) rather than
+    opting out of the section.
 
-    Returns a list of human-readable issue descriptions (empty if the
-    section is well-formed or SECTION 3 is absent from this template).
+    Returns a list of human-readable issue descriptions (empty if both
+    subsections are fully completed, or SECTION 3 is absent from this
+    template).
     """
     section_32: str | None = _extract_section_body(markdown_report, "## 3.2")
     section_33: str | None = _extract_section_body(markdown_report, "## 3.3")
@@ -137,14 +142,18 @@ def _validate_location_section(markdown_report: str) -> list[str]:
         # Missing headings are already reported by the required-heading check.
         return []
 
-    is_32_not_applicable: bool = "not applicable" in section_32.lower()
-    is_33_not_applicable: bool = "not applicable" in section_33.lower()
-
-    if is_32_not_applicable and is_33_not_applicable:
-        return ["SECTION 3 sections 3.2 and 3.3 are both marked not applicable — exactly one must be completed"]
-    if not is_32_not_applicable and not is_33_not_applicable:
-        return ["SECTION 3 sections 3.2 and 3.3 are both completed — exactly one must be marked not applicable"]
-    return []
+    issues: list[str] = []
+    if "not applicable" in section_32.lower():
+        issues.append(
+            "SECTION 3.2 (Location & Geographic Growth Opportunities) is marked not applicable — "
+            "it must always propose real location-based growth tactics, even for non-location-based businesses"
+        )
+    if "not applicable" in section_33.lower():
+        issues.append(
+            "SECTION 3.3 (Audience & Market Expansion Opportunities) is marked not applicable — "
+            "it must always propose real audience/market expansion tactics"
+        )
+    return issues
 
 
 def _find_table_blocks(markdown_report: str) -> list[list[str]]:
@@ -373,11 +382,11 @@ async def generate_report(
             ", ".join(banned_phrases),
         )
 
-    # Validate SECTION 3's conditional location/market-expansion rule.
+    # Validate SECTION 3's completeness rule (neither 3.2 nor 3.3 may be "not applicable").
     location_issues: list[str] = _validate_location_section(markdown_report)
     if location_issues:
         logger.warning(
-            "Generated report for %s has SECTION 3 conditional issues: %s",
+            "Generated report for %s has SECTION 3 completeness issues: %s",
             normalized_url,
             "; ".join(location_issues),
         )
@@ -433,7 +442,7 @@ async def generate_report(
                 )
             if location_issues:
                 logger.warning(
-                    "Retry report for %s still has SECTION 3 conditional issues: %s",
+                    "Retry report for %s still has SECTION 3 completeness issues: %s",
                     normalized_url,
                     "; ".join(location_issues),
                 )
@@ -732,13 +741,13 @@ def _build_retry_user_message(
 ) -> str:
     """
     Build a second-pass instruction that fixes missing headings, contamination,
-    SECTION 3 conditional-section violations, and/or missing citations.
+    SECTION 3 completeness violations, and/or missing citations.
 
     Args:
         original_user_message: The original report-generation user message.
         missing_parts: Required PART headings not found in the first output.
         banned_phrases: Contamination/branding phrases found in the first output.
-        location_issues: SECTION 3 conditional-section rule violations, if any.
+        location_issues: SECTION 3 completeness rule violations, if any.
         citation_issues: Source/Retrieved citation-column violations, if any.
 
     Returns:
@@ -768,10 +777,11 @@ def _build_retry_user_message(
     if location_issues:
         location_text: str = "\n".join(f"- {issue}" for issue in location_issues)
         instruction_blocks.append(
-            "Your previous output violated the SECTION 3 conditional-section rule.\n"
-            "Exactly one of section 3.2 (Local Location Opportunities) or 3.3 "
-            "(Audience & Market Expansion Opportunities) must be completed, and the "
-            "other must state it is not applicable.\n"
+            "Your previous output violated the SECTION 3 completeness rule.\n"
+            "Both section 3.2 (Location & Geographic Growth Opportunities) and section 3.3 "
+            "(Audience & Market Expansion Opportunities) must always be fully completed with "
+            "real, actionable recommendations — never write \"not applicable\" in either "
+            "subsection, regardless of business type.\n"
             f"{location_text}"
         )
 

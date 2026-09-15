@@ -175,28 +175,28 @@
 
 ## 3.1 Applicability Assessment
 
-## 3.2 Local Location Opportunities (if the business serves specific locations)
+## 3.2 Location & Geographic Growth Opportunities
 
-### City-Wise Keyword Volume & Competition Table
+### Location & Regional Keyword Opportunity Table
 
-| # | Target City / Region | Primary Keyword | Est. Monthly Searches | Competition Level | Priority | Source | Retrieved |
-|---|----------------------|-----------------|-------------------------|-------------------|----------|--------|-----------|
+| # | Target City / Region / Market | Primary Keyword | Est. Monthly Searches | Competition Level | Priority | Source | Retrieved |
+|---|-------------------------------|-----------------|-------------------------|-------------------|----------|--------|-----------|
 
-### Top 5 City Landing Page Blueprints
+### Top 5 Location/Market Landing Page Blueprints
 
 | Blueprint Component | Specification & Requirements |
 |------------------------|----------------------------------|
 | Target Primary Keyword Theme | |
-| Unique Local Proof | |
+| Localized Trust Signal | |
 | Core Content Sections | |
 | Internal Linking Structure | |
-| Local Schema Type | |
+| Recommended Schema Type | |
 | Conversion CTA Element | |
 | Anti-Doorway Safeguards | |
 
-(Repeat this blueprint table for each of the five highest-priority competitive cities.)
+(Repeat this blueprint table for each of the five highest-priority target cities, regions, or markets.)
 
-## 3.3 Audience & Market Expansion Opportunities (if location targeting does not apply)
+## 3.3 Audience & Market Expansion Opportunities
 
 ### Audience & Vertical Expansion Table
 

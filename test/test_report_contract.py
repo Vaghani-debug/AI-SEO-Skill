@@ -66,8 +66,8 @@ class TestReportStructureContract:
             "## 2.2 Competitive Gaps & Opportunities",
             "# SECTION 3: LOCATION & MARKET EXPANSION STRATEGY",
             "## 3.1 Applicability Assessment",
-            "## 3.2 Local Location Opportunities (if the business serves specific locations)",
-            "## 3.3 Audience & Market Expansion Opportunities (if location targeting does not apply)",
+            "## 3.2 Location & Geographic Growth Opportunities",
+            "## 3.3 Audience & Market Expansion Opportunities",
             "# SECTION 4: STRUCTURED DATA RECOMMENDATIONS",
             "## 4.1 Recommended Schema Types",
             "## 4.2 Implementation Priority",
@@ -98,7 +98,7 @@ class TestReportStructureContract:
 
         assert "| #Index | Page Name (derived from URL) | URL | Title Tag | SEO Recommendation |" in structure
         assert "| Issue | Severity | Business Impact | SEO Recommendation |" in structure
-        assert "| # | Target City / Region | Primary Keyword | Est. Monthly Searches | Competition Level | Priority | Source | Retrieved |" in structure
+        assert "| # | Target City / Region / Market | Primary Keyword | Est. Monthly Searches | Competition Level | Priority | Source | Retrieved |" in structure
         assert "| Directive / User-Agent | Path / Rule | Status | Impact | SEO Recommendation |" in structure
         assert "| Metric | Observed Value | Google Threshold | Status | Source | SEO Recommendation |" in structure
         assert "| Topic Cluster | Target Primary Keyword | Secondary / Long-Tail Variants | Assigned Target URL | Cannibalization Risk | Strategic Action |" in structure

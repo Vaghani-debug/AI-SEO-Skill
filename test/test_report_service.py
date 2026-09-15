@@ -389,10 +389,10 @@ class TestBuildRetryUserMessage:
 
     def test_includes_location_issue_instruction(self) -> None:
         msg = _build_retry_user_message(
-            "ORIGINAL", [], None, ["PART 7 sections 7.2 and 7.3 are both completed"]
+            "ORIGINAL", [], None, ["SECTION 3.2 is marked not applicable"]
         )
-        assert "PART 7 sections 7.2 and 7.3 are both completed" in msg
-        assert "conditional-section rule" in msg
+        assert "SECTION 3.2 is marked not applicable" in msg
+        assert "completeness rule" in msg
 
     def test_includes_citation_issue_instruction(self) -> None:
         msg = _build_retry_user_message(
@@ -433,51 +433,52 @@ class TestExtractSectionBody:
 # ---------------------------------------------------------------------------
 
 class TestValidateLocationSection:
-    """Tests for the SECTION 3 conditional local-vs-market-expansion rule."""
+    """Tests for the SECTION 3 always-complete (no 'not applicable') rule."""
 
-    def test_no_issues_when_only_32_completed(self) -> None:
+    def test_no_issues_when_both_completed(self) -> None:
         report = (
-            "## 3.2 Local Location Opportunities\n"
+            "## 3.2 Location & Geographic Growth Opportunities\n"
             "Bangalore, Chennai, Hyderabad are strong candidates.\n"
-            "## 3.3 Audience & Market Expansion Opportunities\n"
-            "Not applicable — business does not target specific locations.\n"
-            "---\n"
-        )
-        assert _validate_location_section(report) == []
-
-    def test_no_issues_when_only_33_completed(self) -> None:
-        report = (
-            "## 3.2 Local Location Opportunities\n"
-            "Not applicable — business is not location-based.\n"
             "## 3.3 Audience & Market Expansion Opportunities\n"
             "SaaS teams and enterprise buyers are the primary expansion audience.\n"
             "---\n"
         )
         assert _validate_location_section(report) == []
 
-    def test_issue_when_both_marked_not_applicable(self) -> None:
+    def test_issue_when_32_marked_not_applicable(self) -> None:
         report = (
-            "## 3.2 Local Location Opportunities\n"
+            "## 3.2 Location & Geographic Growth Opportunities\n"
             "Not applicable — business is not location-based.\n"
+            "## 3.3 Audience & Market Expansion Opportunities\n"
+            "SaaS teams and enterprise buyers are the primary expansion audience.\n"
+            "---\n"
+        )
+        issues = _validate_location_section(report)
+        assert len(issues) == 1
+        assert "3.2" in issues[0]
+
+    def test_issue_when_33_marked_not_applicable(self) -> None:
+        report = (
+            "## 3.2 Location & Geographic Growth Opportunities\n"
+            "Bangalore, Chennai, Hyderabad are strong candidates.\n"
             "## 3.3 Audience & Market Expansion Opportunities\n"
             "Not applicable — business does not target specific locations.\n"
             "---\n"
         )
         issues = _validate_location_section(report)
         assert len(issues) == 1
-        assert "both marked not applicable" in issues[0]
+        assert "3.3" in issues[0]
 
-    def test_issue_when_both_completed(self) -> None:
+    def test_issue_when_both_marked_not_applicable(self) -> None:
         report = (
-            "## 3.2 Local Location Opportunities\n"
-            "Bangalore, Chennai are strong candidates.\n"
+            "## 3.2 Location & Geographic Growth Opportunities\n"
+            "Not applicable — business is not location-based.\n"
             "## 3.3 Audience & Market Expansion Opportunities\n"
-            "Enterprise buyers are a strong expansion audience.\n"
+            "Not applicable — business does not target specific locations.\n"
             "---\n"
         )
         issues = _validate_location_section(report)
-        assert len(issues) == 1
-        assert "both completed" in issues[0]
+        assert len(issues) == 2
 
     def test_no_issues_when_section_3_headings_absent(self) -> None:
         """Templates without SECTION 3 (or missing headings) are not flagged here."""
